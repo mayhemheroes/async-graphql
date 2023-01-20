@@ -1,0 +1,6 @@
+image: tngo04/async-graphql:latest
+project: tngo04/async-graphql
+target: parse_query
+
+cmds:
+  - cmd: /parse_query
