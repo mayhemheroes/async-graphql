@@ -1,12 +1,14 @@
 use std::{borrow::Cow, pin::Pin};
 
+use async_graphql_derive::SimpleObject;
+use async_graphql_parser::{types::Field, Positioned};
 use futures_util::{future::BoxFuture, Future, FutureExt};
 use indexmap::IndexMap;
 
 use crate::{
     dynamic::{
-        field::FieldValueInner, type_ref::TypeRefInner, FieldValue, Object, ObjectAccessor,
-        ResolverContext, Schema, Type, TypeRef,
+        field::FieldValueInner, FieldFuture, FieldValue, Object, ObjectAccessor, ResolverContext,
+        Schema, Type, TypeRef,
     },
     extensions::ResolveInfo,
     parser::types::Selection,
@@ -14,6 +16,13 @@ use crate::{
     Context, ContextSelectionSet, Error, IntrospectionMode, Name, SDLExportOptions, ServerError,
     ServerResult, Value,
 };
+
+/// Federation service
+#[derive(SimpleObject)]
+#[graphql(internal, name = "_Service")]
+struct Service {
+    sdl: Option<String>,
+}
 
 type BoxFieldFuture<'a> = Pin<Box<dyn Future<Output = ServerResult<(Name, Value)>> + 'a + Send>>;
 
@@ -27,7 +36,7 @@ pub(crate) async fn resolve_container(
     let mut fields = Vec::new();
     collect_fields(&mut fields, schema, object, ctx, parent_value)?;
 
-    let res = if serial {
+    let res = if !serial {
         futures_util::future::try_join_all(fields).await?
     } else {
         let mut results = Vec::with_capacity(fields.len());
@@ -38,6 +47,246 @@ pub(crate) async fn resolve_container(
     };
 
     Ok(Some(create_value_object(res)))
+}
+
+fn collect_typename_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    object: &'a Object,
+    ctx: &ContextSelectionSet<'a>,
+    field: &'a Positioned<Field>,
+) {
+    if matches!(
+        ctx.schema_env.registry.introspection_mode,
+        IntrospectionMode::Enabled | IntrospectionMode::IntrospectionOnly
+    ) && matches!(
+        ctx.query_env.introspection_mode,
+        IntrospectionMode::Enabled | IntrospectionMode::IntrospectionOnly,
+    ) {
+        fields.push(
+            async move {
+                Ok((
+                    field.node.response_key().node.clone(),
+                    Value::from(object.name.as_str()),
+                ))
+            }
+            .boxed(),
+        )
+    } else {
+        fields
+            .push(async move { Ok((field.node.response_key().node.clone(), Value::Null)) }.boxed())
+    }
+}
+
+fn collect_schema_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    ctx: &ContextSelectionSet<'a>,
+    field: &'a Positioned<Field>,
+) {
+    let ctx = ctx.clone();
+    fields.push(
+        async move {
+            let ctx_field = ctx.with_field(field);
+            let mut ctx_obj = ctx.with_selection_set(&ctx_field.item.node.selection_set);
+            ctx_obj.is_for_introspection = true;
+            let visible_types = ctx.schema_env.registry.find_visible_types(&ctx_field);
+            let value = crate::OutputType::resolve(
+                &crate::model::__Schema::new(&ctx.schema_env.registry, &visible_types),
+                &ctx_obj,
+                ctx_field.item,
+            )
+            .await?;
+            Ok((field.node.response_key().node.clone(), value))
+        }
+        .boxed(),
+    );
+}
+
+fn collect_type_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    ctx: &ContextSelectionSet<'a>,
+    field: &'a Positioned<Field>,
+) {
+    let ctx = ctx.clone();
+    fields.push(
+        async move {
+            let ctx_field = ctx.with_field(field);
+            let (_, type_name) = ctx_field.param_value::<String>("name", None)?;
+            let mut ctx_obj = ctx.with_selection_set(&ctx_field.item.node.selection_set);
+            ctx_obj.is_for_introspection = true;
+            let visible_types = ctx.schema_env.registry.find_visible_types(&ctx_field);
+            let value = crate::OutputType::resolve(
+                &ctx.schema_env
+                    .registry
+                    .types
+                    .get(&type_name)
+                    .filter(|_| visible_types.contains(type_name.as_str()))
+                    .map(|ty| {
+                        crate::model::__Type::new_simple(
+                            &ctx.schema_env.registry,
+                            &visible_types,
+                            ty,
+                        )
+                    }),
+                &ctx_obj,
+                ctx_field.item,
+            )
+            .await?;
+            Ok((field.node.response_key().node.clone(), value))
+        }
+        .boxed(),
+    );
+}
+
+fn collect_service_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    ctx: &ContextSelectionSet<'a>,
+    field: &'a Positioned<Field>,
+) {
+    let ctx = ctx.clone();
+    fields.push(
+        async move {
+            let ctx_field = ctx.with_field(field);
+            let mut ctx_obj = ctx.with_selection_set(&ctx_field.item.node.selection_set);
+            ctx_obj.is_for_introspection = true;
+
+            let output_type = crate::OutputType::resolve(
+                &Service {
+                    sdl: Some(
+                        ctx.schema_env
+                            .registry
+                            .export_sdl(SDLExportOptions::new().federation().compose_directive()),
+                    ),
+                },
+                &ctx_obj,
+                ctx_field.item,
+            )
+            .await?;
+
+            Ok((field.node.response_key().node.clone(), output_type))
+        }
+        .boxed(),
+    );
+}
+
+fn collect_entities_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    schema: &'a Schema,
+    ctx: &ContextSelectionSet<'a>,
+    parent_value: &'a FieldValue,
+    field: &'a Positioned<Field>,
+) {
+    let ctx = ctx.clone();
+    fields.push(
+        async move {
+            let ctx_field = ctx.with_field(field);
+            let entity_resolver = schema.0.entity_resolver.as_ref().ok_or_else(|| {
+                ctx_field.set_error_path(
+                    Error::new("internal: missing entity resolver")
+                        .into_server_error(ctx_field.item.pos),
+                )
+            })?;
+            let entity_type = TypeRef::named_list_nn("_Entity");
+
+            let arguments = ObjectAccessor(Cow::Owned(
+                field
+                    .node
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| {
+                        ctx_field
+                            .resolve_input_value(value.clone())
+                            .map(|value| (name.node.clone(), value))
+                    })
+                    .collect::<ServerResult<IndexMap<Name, Value>>>()?,
+            ));
+
+            let field_future = (entity_resolver)(ResolverContext {
+                ctx: &ctx_field,
+                args: arguments,
+                parent_value,
+            });
+
+            let field_value = match field_future {
+                FieldFuture::Future(fut) => {
+                    fut.await.map_err(|err| err.into_server_error(field.pos))?
+                }
+                FieldFuture::Value(value) => value,
+            };
+            let value = resolve(schema, &ctx_field, &entity_type, field_value.as_ref())
+                .await?
+                .unwrap_or_default();
+            Ok((field.node.response_key().node.clone(), value))
+        }
+        .boxed(),
+    );
+}
+
+fn collect_field<'a>(
+    fields: &mut Vec<BoxFieldFuture<'a>>,
+    schema: &'a Schema,
+    object: &'a Object,
+    ctx: &ContextSelectionSet<'a>,
+    parent_value: &'a FieldValue,
+    field_def: &'a crate::dynamic::Field,
+    field: &'a Positioned<Field>,
+) {
+    let ctx = ctx.clone();
+    fields.push(
+        async move {
+            let ctx_field = ctx.with_field(field);
+            let arguments = ObjectAccessor(Cow::Owned(
+                field
+                    .node
+                    .arguments
+                    .iter()
+                    .map(|(name, value)| {
+                        ctx_field
+                            .resolve_input_value(value.clone())
+                            .map(|value| (name.node.clone(), value))
+                    })
+                    .collect::<ServerResult<IndexMap<Name, Value>>>()?,
+            ));
+
+            let resolve_info = ResolveInfo {
+                path_node: ctx_field.path_node.as_ref().unwrap(),
+                parent_type: &object.name,
+                return_type: &field_def.ty_str,
+                name: &field.node.name.node,
+                alias: field.node.alias.as_ref().map(|alias| &*alias.node),
+                is_for_introspection: ctx_field.is_for_introspection,
+            };
+
+            let resolve_fut = async {
+                let field_future = (field_def.resolver_fn)(ResolverContext {
+                    ctx: &ctx_field,
+                    args: arguments,
+                    parent_value,
+                });
+
+                let field_value = match field_future {
+                    FieldFuture::Value(field_value) => field_value,
+                    FieldFuture::Future(future) => future
+                        .await
+                        .map_err(|err| err.into_server_error(field.pos))?,
+                };
+
+                let value =
+                    resolve(schema, &ctx_field, &field_def.ty, field_value.as_ref()).await?;
+
+                Ok(value)
+            };
+            futures_util::pin_mut!(resolve_fut);
+
+            let res_value = ctx_field
+                .query_env
+                .extensions
+                .resolve(resolve_info, &mut resolve_fut)
+                .await?
+                .unwrap_or_default();
+            Ok((field.node.response_key().node.clone(), res_value))
+        }
+        .boxed(),
+    );
 }
 
 fn collect_fields<'a>(
@@ -51,27 +300,7 @@ fn collect_fields<'a>(
         match &selection.node {
             Selection::Field(field) => {
                 if field.node.name.node == "__typename" {
-                    if matches!(
-                        ctx.schema_env.registry.introspection_mode,
-                        IntrospectionMode::Enabled | IntrospectionMode::IntrospectionOnly
-                    ) && matches!(
-                        ctx.query_env.introspection_mode,
-                        IntrospectionMode::Enabled | IntrospectionMode::IntrospectionOnly,
-                    ) {
-                        fields.push(
-                            async move {
-                                Ok((
-                                    field.node.response_key().node.clone(),
-                                    Value::from(object.name.as_str()),
-                                ))
-                            }
-                            .boxed(),
-                        )
-                    } else {
-                        fields.push(
-                            async move { Ok((field.node.response_key().node.clone(), Value::Null)) }.boxed(),
-                        )
-                    }
+                    collect_typename_field(fields, object, ctx, field);
                     continue;
                 }
 
@@ -87,126 +316,20 @@ fn collect_fields<'a>(
                 {
                     // is query root
                     if field.node.name.node == "__schema" {
-                        let ctx = ctx.clone();
-                        fields.push(
-                            async move {
-                                let ctx_field = ctx.with_field(field);
-                                let mut ctx_obj =
-                                    ctx.with_selection_set(&ctx_field.item.node.selection_set);
-                                ctx_obj.is_for_introspection = true;
-                                let visible_types =
-                                    ctx.schema_env.registry.find_visible_types(&ctx_field);
-                                let value = crate::OutputType::resolve(
-                                    &crate::model::__Schema::new(
-                                        &ctx.schema_env.registry,
-                                        &visible_types,
-                                    ),
-                                    &ctx_obj,
-                                    ctx_field.item,
-                                )
-                                .await?;
-                                Ok((field.node.response_key().node.clone(), value))
-                            }
-                            .boxed(),
-                        );
+                        collect_schema_field(fields, ctx, field);
                         continue;
                     } else if field.node.name.node == "__type" {
-                        let ctx = ctx.clone();
-                        fields.push(
-                            async move {
-                                let ctx_field = ctx.with_field(field);
-                                let (_, type_name) =
-                                    ctx_field.param_value::<String>("name", None)?;
-                                let mut ctx_obj =
-                                    ctx.with_selection_set(&ctx_field.item.node.selection_set);
-                                ctx_obj.is_for_introspection = true;
-                                let visible_types =
-                                    ctx.schema_env.registry.find_visible_types(&ctx_field);
-                                let value = crate::OutputType::resolve(
-                                    &ctx.schema_env
-                                        .registry
-                                        .types
-                                        .get(&type_name)
-                                        .filter(|_| visible_types.contains(type_name.as_str()))
-                                        .map(|ty| {
-                                            crate::model::__Type::new_simple(
-                                                &ctx.schema_env.registry,
-                                                &visible_types,
-                                                ty,
-                                            )
-                                        }),
-                                    &ctx_obj,
-                                    ctx_field.item,
-                                )
-                                .await?;
-                                Ok((field.node.response_key().node.clone(), value))
-                            }
-                            .boxed(),
-                        );
+                        collect_type_field(fields, ctx, field);
                         continue;
                     } else if ctx.schema_env.registry.enable_federation
                         && field.node.name.node == "_service"
                     {
-                        let sdl = ctx
-                            .schema_env
-                            .registry
-                            .export_sdl(SDLExportOptions::new().federation());
-                        fields.push(
-                            async move {
-                                Ok((field.node.response_key().node.clone(), Value::from(sdl)))
-                            }
-                            .boxed(),
-                        );
+                        collect_service_field(fields, ctx, field);
                         continue;
                     } else if ctx.schema_env.registry.enable_federation
                         && field.node.name.node == "_entities"
                     {
-                        let ctx = ctx.clone();
-                        fields.push(
-                            async move {
-                                let ctx_field = ctx.with_field(field);
-                                let entity_resolver =
-                                    schema.0.entity_resolver.as_ref().ok_or_else(|| {
-                                        ctx_field.set_error_path(
-                                            Error::new("internal: missing entity resolver")
-                                                .into_server_error(ctx_field.item.pos),
-                                        )
-                                    })?;
-                                let entity_type = TypeRef::named_list_nn("_Entity");
-
-                                let arguments = ObjectAccessor(Cow::Owned(
-                                    field
-                                        .node
-                                        .arguments
-                                        .iter()
-                                        .map(|(name, value)| {
-                                            ctx_field
-                                                .resolve_input_value(value.clone())
-                                                .map(|value| (name.node.clone(), value))
-                                        })
-                                        .collect::<ServerResult<IndexMap<Name, Value>>>()?,
-                                ));
-
-                                let field_value = (entity_resolver)(ResolverContext {
-                                    ctx: &ctx_field,
-                                    args: arguments,
-                                    parent_value,
-                                })
-                                .0
-                                .await
-                                .map_err(|err| err.into_server_error(field.pos))?;
-                                let value = resolve(
-                                    schema,
-                                    &ctx_field,
-                                    &entity_type.0,
-                                    field_value.as_ref(),
-                                )
-                                .await?
-                                .unwrap_or_default();
-                                Ok((field.node.response_key().node.clone(), value))
-                            }
-                            .boxed(),
-                        );
+                        collect_entities_field(fields, schema, ctx, parent_value, field);
                         continue;
                     }
                 }
@@ -223,62 +346,7 @@ fn collect_fields<'a>(
                 }
 
                 if let Some(field_def) = object.fields.get(field.node.name.node.as_str()) {
-                    let ctx = ctx.clone();
-                    fields.push(
-                        async move {
-                            let ctx_field = ctx.with_field(field);
-                            let arguments = ObjectAccessor(Cow::Owned(
-                                field
-                                    .node
-                                    .arguments
-                                    .iter()
-                                    .map(|(name, value)| {
-                                        ctx_field
-                                            .resolve_input_value(value.clone())
-                                            .map(|value| (name.node.clone(), value))
-                                    })
-                                    .collect::<ServerResult<IndexMap<Name, Value>>>()?,
-                            ));
-
-                            let resolve_info = ResolveInfo {
-                                path_node: ctx_field.path_node.as_ref().unwrap(),
-                                parent_type: &object.name,
-                                return_type: &field_def.ty.to_string(),
-                                name: &field.node.name.node,
-                                alias: field.node.alias.as_ref().map(|alias| &*alias.node),
-                                is_for_introspection: ctx_field.is_for_introspection,
-                            };
-
-                            let resolve_fut = async {
-                                let field_value = (field_def.resolver_fn)(ResolverContext {
-                                    ctx: &ctx_field,
-                                    args: arguments,
-                                    parent_value,
-                                })
-                                .0
-                                .await
-                                .map_err(|err| err.into_server_error(field.pos))?;
-                                let value = resolve(
-                                    schema,
-                                    &ctx_field,
-                                    &field_def.ty.0,
-                                    field_value.as_ref(),
-                                )
-                                .await?;
-                                Ok(value)
-                            };
-                            futures_util::pin_mut!(resolve_fut);
-
-                            let res_value = ctx_field
-                                .query_env
-                                .extensions
-                                .resolve(resolve_info, &mut resolve_fut)
-                                .await?
-                                .unwrap_or_default();
-                            Ok((field.node.response_key().node.clone(), res_value))
-                        }
-                        .boxed(),
-                    );
+                    collect_field(fields, schema, object, ctx, parent_value, field_def, field);
                 }
             }
             selection => {
@@ -313,7 +381,13 @@ fn collect_fields<'a>(
                     type_condition.map(|condition| condition.node.on.node.as_str());
                 let introspection_type_name = &object.name;
 
-                if type_condition.is_none() || type_condition == Some(introspection_type_name) {
+                let type_condition_matched = match type_condition {
+                    None => true,
+                    Some(type_condition) if type_condition == introspection_type_name => true,
+                    Some(type_condition) if object.implements.contains(type_condition) => true,
+                    _ => false,
+                };
+                if type_condition_matched {
                     collect_fields(
                         fields,
                         schema,
@@ -332,29 +406,29 @@ fn collect_fields<'a>(
 pub(crate) fn resolve<'a>(
     schema: &'a Schema,
     ctx: &'a Context<'a>,
-    type_ref: &'a TypeRefInner,
+    type_ref: &'a TypeRef,
     value: Option<&'a FieldValue>,
 ) -> BoxFuture<'a, ServerResult<Option<Value>>> {
     async move {
         match (type_ref, value) {
-            (TypeRefInner::Named(type_name), Some(value)) => {
+            (TypeRef::Named(type_name), Some(value)) => {
                 resolve_value(schema, ctx, &schema.0.types[type_name.as_ref()], value).await
             }
-            (TypeRefInner::Named(_), None) => Ok(None),
+            (TypeRef::Named(_), None) => Ok(None),
 
-            (TypeRefInner::NonNull(type_ref), Some(value)) => {
+            (TypeRef::NonNull(type_ref), Some(value)) => {
                 resolve(schema, ctx, type_ref, Some(value)).await
             }
-            (TypeRefInner::NonNull(_), None) => Err(ctx.set_error_path(
+            (TypeRef::NonNull(_), None) => Err(ctx.set_error_path(
                 Error::new("internal: non-null types require a return value")
                     .into_server_error(ctx.item.pos),
             )),
 
-            (TypeRefInner::List(type_ref), Some(FieldValue(FieldValueInner::List(values)))) => {
+            (TypeRef::List(type_ref), Some(FieldValue(FieldValueInner::List(values)))) => {
                 resolve_list(schema, ctx, type_ref, values).await
             }
             (
-                TypeRefInner::List(type_ref),
+                TypeRef::List(type_ref),
                 Some(FieldValue(FieldValueInner::Value(Value::List(values)))),
             ) => {
                 let values = values
@@ -364,10 +438,10 @@ pub(crate) fn resolve<'a>(
                     .collect::<Vec<_>>();
                 resolve_list(schema, ctx, type_ref, &values).await
             }
-            (TypeRefInner::List(_), Some(_)) => Err(ctx.set_error_path(
+            (TypeRef::List(_), Some(_)) => Err(ctx.set_error_path(
                 Error::new("internal: expects an array").into_server_error(ctx.item.pos),
             )),
-            (TypeRefInner::List(_), None) => Ok(None),
+            (TypeRef::List(_), None) => Ok(None),
         }
     }
     .boxed()
@@ -376,7 +450,7 @@ pub(crate) fn resolve<'a>(
 async fn resolve_list<'a>(
     schema: &'a Schema,
     ctx: &'a Context<'a>,
-    type_ref: &'a TypeRefInner,
+    type_ref: &'a TypeRef,
     values: &[FieldValue<'_>],
 ) -> ServerResult<Option<Value>> {
     let mut futures = Vec::with_capacity(values.len());
@@ -578,13 +652,16 @@ async fn resolve_value(
             ))
             .into_server_error(ctx.item.pos),
         )),
-
         (Type::Subscription(subscription), _) => Err(ctx.set_error_path(
             Error::new(format!(
                 "internal: cannot use subscription \"{}\" as output value",
                 subscription.name
             ))
             .into_server_error(ctx.item.pos),
+        )),
+        (Type::Upload, _) => Err(ctx.set_error_path(
+            Error::new("internal: cannot use upload as output value")
+                .into_server_error(ctx.item.pos),
         )),
     }
 }

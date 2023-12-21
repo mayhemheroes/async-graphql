@@ -1,6 +1,6 @@
 # 自定义指令
 
-`Async-graphql`可以很方便的自定义指令，这可以扩展GraphQL的行为。
+`Async-graphql`可以很方便的自定义指令，这可以扩展 GraphQL 的行为。
 
 创建一个自定义指令，需要实现 `CustomDirective` trait，然后用`Directive`宏生成一个工厂函数，该函数接收指令的参数并返回指令的实例。
 
@@ -25,7 +25,7 @@ impl CustomDirective for ConcatDirective {
     }
 }
 
-#[Directive(location = "field")]
+#[Directive(location = "Field")]
 fn concat(value: String) -> impl CustomDirective {
     ConcatDirective { value }
 }
@@ -44,7 +44,7 @@ fn concat(value: String) -> impl CustomDirective {
 # impl CustomDirective for ConcatDirective {
 #   async fn resolve_field(&self, _ctx: &Context<'_>, resolve: ResolveFut<'_>) -> ServerResult<Option<Value>> { todo!() }
 # }
-# #[Directive(location = "field")]
+# #[Directive(location = "Field")]
 # fn concat(value: String) -> impl CustomDirective { ConcatDirective { value } }
 let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
     .directive(concat)

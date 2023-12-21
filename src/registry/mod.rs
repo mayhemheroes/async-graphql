@@ -12,7 +12,7 @@ pub use cache_control::CacheControl;
 pub use export_sdl::SDLExportOptions;
 use indexmap::{map::IndexMap, set::IndexSet};
 
-pub use crate::model::__DirectiveLocation;
+pub use crate::model::{__DirectiveLocation, location_traits};
 use crate::{
     model::__Schema,
     parser::types::{BaseType as ParsedBaseType, Field, Type as ParsedType, VariableDefinition},
@@ -106,6 +106,33 @@ impl<'a> MetaTypeName<'a> {
     }
 }
 
+/// actual directive invocation on SDL definitions
+#[derive(Clone)]
+pub struct MetaDirectiveInvocation {
+    /// name of directive to invoke
+    pub name: String,
+    /// actual arguments passed to directive
+    pub args: IndexMap<String, Value>,
+}
+
+impl MetaDirectiveInvocation {
+    pub fn sdl(&self) -> String {
+        let formatted_args = if self.args.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "({})",
+                self.args
+                    .iter()
+                    .map(|(name, value)| format!("{}: {}", name, value))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        format!("@{}{}", self.name, formatted_args)
+    }
+}
+
 /// Input value metadata
 #[derive(Clone)]
 pub struct MetaInputValue {
@@ -137,22 +164,13 @@ type ComputeComplexityFn = fn(
     usize,
 ) -> ServerResult<usize>;
 
-#[derive(Clone)]
-pub enum ComplexityType {
-    Const(usize),
-    Fn(ComputeComplexityFn),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Deprecation {
+    #[default]
     NoDeprecated,
-    Deprecated { reason: Option<String> },
-}
-
-impl Default for Deprecation {
-    fn default() -> Self {
-        Deprecation::NoDeprecated
-    }
+    Deprecated {
+        reason: Option<String>,
+    },
 }
 
 impl Deprecation {
@@ -213,7 +231,9 @@ pub struct MetaField {
     /// subgraph. It is used to migrate fields between subgraphs.
     pub override_from: Option<String>,
     /// A constant or function to get the complexity
-    pub compute_complexity: Option<ComplexityType>,
+    pub compute_complexity: Option<ComputeComplexityFn>,
+    /// Custom directive invocations
+    pub directive_invocations: Vec<MetaDirectiveInvocation>,
 }
 
 #[derive(Clone)]
@@ -236,6 +256,79 @@ pub enum MetaTypeId {
     Union,
     Enum,
     InputObject,
+}
+
+impl MetaTypeId {
+    fn create_fake_type(&self, rust_typename: &'static str) -> MetaType {
+        match self {
+            MetaTypeId::Scalar => MetaType::Scalar {
+                name: "".to_string(),
+                description: None,
+                is_valid: None,
+                visible: None,
+                inaccessible: false,
+                tags: vec![],
+                specified_by_url: None,
+            },
+            MetaTypeId::Object => MetaType::Object {
+                name: "".to_string(),
+                description: None,
+                fields: Default::default(),
+                cache_control: Default::default(),
+                extends: false,
+                shareable: false,
+                resolvable: true,
+                inaccessible: false,
+                interface_object: false,
+                tags: vec![],
+                keys: None,
+                visible: None,
+                is_subscription: false,
+                rust_typename: Some(rust_typename),
+                directive_invocations: vec![],
+            },
+            MetaTypeId::Interface => MetaType::Interface {
+                name: "".to_string(),
+                description: None,
+                fields: Default::default(),
+                possible_types: Default::default(),
+                extends: false,
+                inaccessible: false,
+                tags: vec![],
+                keys: None,
+                visible: None,
+                rust_typename: Some(rust_typename),
+            },
+            MetaTypeId::Union => MetaType::Union {
+                name: "".to_string(),
+                description: None,
+                possible_types: Default::default(),
+                visible: None,
+                inaccessible: false,
+                tags: vec![],
+                rust_typename: Some(rust_typename),
+            },
+            MetaTypeId::Enum => MetaType::Enum {
+                name: "".to_string(),
+                description: None,
+                enum_values: Default::default(),
+                visible: None,
+                inaccessible: false,
+                tags: vec![],
+                rust_typename: Some(rust_typename),
+            },
+            MetaTypeId::InputObject => MetaType::InputObject {
+                name: "".to_string(),
+                description: None,
+                input_fields: Default::default(),
+                visible: None,
+                inaccessible: false,
+                tags: vec![],
+                rust_typename: Some(rust_typename),
+                oneof: false,
+            },
+        }
+    }
 }
 
 impl Display for MetaTypeId {
@@ -308,6 +401,14 @@ pub enum MetaType {
         ///
         /// Reference: <https://www.apollographql.com/docs/federation/federated-types/federated-directives/#shareable>
         shareable: bool,
+        /// Indicates that the subgraph does not define a reference resolver
+        /// for this object. Objects are assumed to be resolvable by default.
+        ///
+        /// Most commonly used to reference an entity defined in another
+        /// subgraph without contributing fields. Part of the `@key` directive.
+        ///
+        /// Reference: <https://www.apollographql.com/docs/federation/federated-types/federated-directives/#key>
+        resolvable: bool,
         /// The keys of the object type
         ///
         /// Designates an object type as an [entity](https://www.apollographql.com/docs/federation/entities) and specifies
@@ -324,6 +425,12 @@ pub enum MetaType {
         ///
         /// Reference: <https://www.apollographql.com/docs/federation/federated-types/federated-directives/#inaccessible>
         inaccessible: bool,
+        /// During composition, the fields of every `@interfaceObject` are added
+        /// both to their corresponding interface definition and to all
+        /// entity types that implement that interface.
+        ///
+        /// Reference: <https://www.apollographql.com/docs/federation/federated-types/federated-directives/#interfaceobject>
+        interface_object: bool,
         /// Arbitrary string metadata that will be propagated to the supergraph
         /// when using Apollo Federation. This attribute is repeatable
         ///
@@ -333,6 +440,8 @@ pub enum MetaType {
         is_subscription: bool,
         /// The Rust typename corresponding to the object
         rust_typename: Option<&'static str>,
+        /// custom directive invocations
+        directive_invocations: Vec<MetaDirectiveInvocation>,
     },
     /// Interface
     ///
@@ -594,6 +703,7 @@ pub struct MetaDirective {
     pub args: IndexMap<String, MetaInputValue>,
     pub is_repeatable: bool,
     pub visible: Option<MetaVisibleFn>,
+    pub composable: Option<String>,
 }
 
 impl MetaDirective {
@@ -623,7 +733,7 @@ impl MetaDirective {
 #[derive(Default)]
 pub struct Registry {
     pub types: BTreeMap<String, MetaType>,
-    pub directives: HashMap<String, MetaDirective>,
+    pub directives: BTreeMap<String, MetaDirective>,
     pub implements: HashMap<String, IndexSet<String>>,
     pub query_type: String,
     pub mutation_type: Option<String>,
@@ -661,6 +771,7 @@ impl Registry {
             },
             is_repeatable: false,
             visible: None,
+            composable: None,
         });
 
         self.add_directive(MetaDirective {
@@ -687,6 +798,7 @@ impl Registry {
             },
             is_repeatable: false,
             visible: None,
+            composable: None,
         });
 
         // create system scalars
@@ -733,7 +845,7 @@ impl Registry {
         &mut self,
         f: &mut F,
         name: &str,
-        rust_typename: &str,
+        rust_typename: &'static str,
         type_id: MetaTypeId,
     ) {
         match self.types.get(name) {
@@ -764,23 +876,8 @@ impl Registry {
             None => {
                 // Inserting a fake type before calling the function allows recursive types to
                 // exist.
-                self.types.insert(
-                    name.to_string(),
-                    MetaType::Object {
-                        name: "".to_string(),
-                        description: None,
-                        fields: Default::default(),
-                        cache_control: Default::default(),
-                        extends: false,
-                        shareable: false,
-                        inaccessible: false,
-                        tags: Default::default(),
-                        keys: None,
-                        visible: None,
-                        is_subscription: false,
-                        rust_typename: None,
-                    },
-                );
+                self.types
+                    .insert(name.to_string(), type_id.create_fake_type(rust_typename));
                 let ty = f(self);
                 *self.types.get_mut(name).unwrap() = ty;
             }
@@ -856,7 +953,9 @@ impl Registry {
     pub(crate) fn has_entities(&self) -> bool {
         self.types.values().any(|ty| match ty {
             MetaType::Object {
-                keys: Some(keys), ..
+                keys: Some(keys),
+                resolvable: true,
+                ..
             }
             | MetaType::Interface {
                 keys: Some(keys), ..
@@ -878,6 +977,7 @@ impl Registry {
                 MetaType::Object {
                     name,
                     keys: Some(keys),
+                    resolvable: true,
                     ..
                 } if !keys.is_empty() => Some(name.clone()),
                 MetaType::Interface {
@@ -889,7 +989,11 @@ impl Registry {
             })
             .collect();
 
-        if let MetaType::Object { fields, .. } = self.types.get_mut(&self.query_type).unwrap() {
+        if let MetaType::Object { fields, .. } = self
+            .types
+            .get_mut(&self.query_type)
+            .expect("missing query type")
+        {
             fields.insert(
                 "_service".to_string(),
                 MetaField {
@@ -908,6 +1012,7 @@ impl Registry {
                     override_from: None,
                     visible: None,
                     compute_complexity: None,
+                    directive_invocations: vec![],
                 },
             );
         }
@@ -961,6 +1066,7 @@ impl Registry {
                         tags: Default::default(),
                         override_from: None,
                         compute_complexity: None,
+                        directive_invocations: vec![],
                     },
                 );
             }
@@ -989,6 +1095,7 @@ impl Registry {
                     visible: None,
                     compute_complexity: None,
                     override_from: None,
+                    directive_invocations: vec![],
                 },
             );
 
@@ -1026,6 +1133,7 @@ impl Registry {
                     override_from: None,
                     visible: None,
                     compute_complexity: None,
+                    directive_invocations: vec![],
                 },
             );
         }
@@ -1059,6 +1167,7 @@ impl Registry {
                             tags: Default::default(),
                             override_from: None,
                             compute_complexity: None,
+                            directive_invocations: vec![],
                         },
                     );
                     fields
@@ -1066,12 +1175,15 @@ impl Registry {
                 cache_control: Default::default(),
                 extends: false,
                 shareable: false,
+                resolvable: true,
+                interface_object: false,
                 keys: None,
                 visible: None,
                 inaccessible: false,
                 tags: Default::default(),
                 is_subscription: false,
                 rust_typename: Some("async_graphql::federation::Service"),
+                directive_invocations: vec![],
             },
         );
 
@@ -1407,4 +1519,26 @@ fn is_system_type(name: &str) -> bool {
     }
 
     name == "Boolean" || name == "Int" || name == "Float" || name == "String" || name == "ID"
+}
+
+#[cfg(test)]
+mod test {
+    use crate::registry::MetaDirectiveInvocation;
+
+    #[test]
+    fn test_directive_invocation_dsl() {
+        let expected = r#"@testDirective(int_value: 1, str_value: "abc")"#;
+        assert_eq!(
+            expected.to_string(),
+            MetaDirectiveInvocation {
+                name: "testDirective".to_string(),
+                args: [
+                    ("int_value".to_string(), 1u32.into()),
+                    ("str_value".to_string(), "abc".into())
+                ]
+                .into(),
+            }
+            .sdl()
+        )
+    }
 }

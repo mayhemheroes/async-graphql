@@ -4,6 +4,139 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+# [6.0.11] 2023-11-19
+
+- Clean up example docs [#1411](https://github.com/async-graphql/async-graphql/pull/1411)
+- Run batch requests concurrently [#1420](https://github.com/async-graphql/async-graphql/pull/1420)
+- Update opentelemetry to `v0.21.x` [#1422](https://github.com/async-graphql/async-graphql/pull/1422)
+
+# [6.0.10] 2023-11-04
+
+- bump opentelemetry `0.20.0` [#1406](https://github.com/async-graphql/async-graphql/pull/1406)
+- fix check for serial [#1405](https://github.com/async-graphql/async-graphql/pull/1405)
+- fixes complexity visitor
+- bump Rocket from `0.5.0-rc.2` to `0.5.0-rc.4`
+
+# [6.0.9] 2023-10-21
+
+- add support uploading files in dynamic schema [#1384](https://github.com/async-graphql/async-graphql/discussions/1384)
+- Include `@composeDirective` in Federation's `_service` field and document `#[TypeDirective]` [#1400](https://github.com/async-graphql/async-graphql/pull/1400)
+
+# [6.0.7] 2023-09-23
+
+- initialize source field in tracing extension parse_query method [#1367](https://github.com/async-graphql/async-graphql/pull/1367)
+- test(variables): empty object passes but empty array fails [#1377](https://github.com/async-graphql/async-graphql/pull/1377)
+- Add support for entities without a reference resolver [#1378](https://github.com/async-graphql/async-graphql/pull/1378)
+- Fixes [#1356](https://github.com/async-graphql/async-graphql/pull/1356)
+
+# [6.0.6] 2023-09-04
+
+- fixed SDL formatting for resolver argument comments regressed [#1363](https://github.com/async-graphql/async-graphql/issues/1363)
+
+# [6.0.5] 2023-08-20
+
+- Implement exporting argument documentation [#1352](https://github.com/async-graphql/async-graphql/pull/1352)
+- Add `ValueAccessor::as_value` and `ListAccessor::as_values_slice` methods [#1353](https://github.com/async-graphql/async-graphql/pull/1353)
+- dynamic: fixes key not found when using entity resolver [#1362](https://github.com/async-graphql/async-graphql/issues/1362)
+- fix panic in complexity visitor [#1359](https://github.com/async-graphql/async-graphql/pull/1359)
+- update MSRV to `1.70.0`
+
+# [6.0.4] 2023-08-18
+
+- Parse "repeatable" in directive definitions. [#1336](https://github.com/async-graphql/async-graphql/pull/1336)
+- add support `multipart/mixed` request. [#1348](https://github.com/async-graphql/async-graphql/issues/1348)
+- async-graphql-actix-web: add `GraphQL` handler.
+- async-graphql-axum: add `GraphQL` service.
+
+# [6.0.3] 2023-08-15
+
+- dynamic: fix the error that some methods of `XXXAccessor` return reference lifetimes that are smaller than expected.
+- dynamic: no longer throws an error if the Query object does not contain any fields but the schema contains entities.
+- chore: make accessors public and reexport indexmap [#1329](https://github.com/async-graphql/async-graphql/pull/1329)
+- feat: added `OutputType` implementation for `std::sync::Weak` [#1334](https://github.com/async-graphql/async-graphql/pull/1334)
+
+# [6.0.1] 2023-08-02
+
+- dynamic: remove `TypeRefInnner`
+- update MSRV to `1.67.0`
+
+# [6.0.0] 2023-07-29
+
+- Bump `syn` from `1.0` to `2.0`
+- Bump `darling` from `0.14` to `0.20`
+- Bump `indexmap` from `1.6.2` to `2`
+- Attributes `guard`, `process_with`, `complexity` support expression or string as value [#1295](https://github.com/async-graphql/async-graphql/issues/1295)
+- Schema (type) level directive support with optional support of federation composeDirective [#1308](https://github.com/async-graphql/async-graphql/pull/1308)
+- Add support for generic structs derriving InputObject and SimpleObject [#1313](https://github.com/async-graphql/async-graphql/pull/1313)
+- chore: trim up some unnecessary code [#1324](https://github.com/async-graphql/async-graphql/pull/1324)
+- Adds `Dataloader::get_cached_values` method to the dataloader cache so that callers can access the contents of the cache without knowing the keys. [#1326](https://github.com/async-graphql/async-graphql/pull/1326)
+
+## Breaking Changes
+
+- Since `syn 2.0` no longer supports keywords as meta path, rename the parameter used to specify interface field types from `type` to `ty`.
+
+    https://github.com/dtolnay/syn/issues/1458
+    https://github.com/TedDriggs/darling/issues/238
+
+```rust
+#[derive(Interface)]
+#[graphql(field(name = "id", ty = "&i32"))] // rename from type to ty
+enum Node {
+    MyObj(MyObj),
+}
+```
+
+- Change the parameter `location` of the macro `Directive` to *PascalCase*
+
+```rust
+// #[Directive(location = "field")]
+#[Directive(location = "Field")]
+pub fn lowercase() -> impl CustomDirective {
+    LowercaseDirective
+}
+```
+
+# [5.0.10] 2023-06-07
+
+- Upgrade opentelemetry to 0.19.0 [#1252](https://github.com/async-graphql/async-graphql/pull/1262)
+- Remove internal `CursorScalar` type and expose `Edge::cursor` member [#1302](https://github.com/async-graphql/async-graphql/pull/1302)
+
+# [5.0.9] 2023-05-25
+
+- Prevent input check stack overflow [#1293](https://github.com/async-graphql/async-graphql/pull/1293)
+- Change batch requests to run concurrently [#1290](https://github.com/async-graphql/async-graphql/issues/1290)
+
+# [5.0.8] 2023-05-09
+
+- Improve documentation on Dataloader [#1282](https://github.com/async-graphql/async-graphql/pull/1282)
+- Prevent recursive input type checking from hitting stack overflow [#1284](https://github.com/async-graphql/async-graphql/pull/1284)
+- update MSRV to `1.65.0`
+
+# [5.0.7] 2023-03-25
+
+- Disable default-features in workspace.dependencies [#1232](https://github.com/async-graphql/async-graphql/pull/1232)
+- Copy edit extensions section of The Book [#1234](https://github.com/async-graphql/async-graphql/pull/1234)
+- disable default features for async-graphql in workspace dependencies [#1237](https://github.com/async-graphql/async-graphql/pull/1237)
+- chore: make edge field and connection field shareable [#1246](https://github.com/async-graphql/async-graphql/pull/1246)
+- Added 3 new fns to the ObjectAccessor. [#1244](https://github.com/async-graphql/async-graphql/pull/1244)
+- Dataloader futures lose span context [#1256](https://github.com/async-graphql/async-graphql/pull/1256)
+- Propagate ErrorExtensionValues when calling InputValueError.propagate [#1257](https://github.com/async-graphql/async-graphql/pull/1257)
+- Correct error string for object in ValueAccessor [#1260](https://github.com/async-graphql/async-graphql/pull/1260)
+
+# [5.0.6] 2023-02-11
+
+- docs: Tweak dataloader example and link to full example [#1194](https://github.com/async-graphql/async-graphql/pull/1194)
+- docs: Mention the importance of using dataloader with federation/entities [#1194](https://github.com/async-graphql/async-graphql/pull/1194)
+- chore: enable GraphiQL/Playground via feature flag [#1202](https://github.com/async-graphql/async-graphql/pull/1202)
+- fix: Export directives to federation SDL so they can be composed. [#1209](https://github.com/async-graphql/async-graphql/pull/1209)
+- Fix doc contents details and add AutoCorrect lint to CI. [#1210](https://github.com/async-graphql/async-graphql/pull/1210)
+- fix: provide correct type for _service with dynamic schema [#1212](https://github.com/async-graphql/async-graphql/pull/1212)
+- feat(subscription): support generics in MergedSubscription types [#1222](https://github.com/async-graphql/async-graphql/pull/1222)
+- feat: modify Connection to allow optionally disable nodes field in gql output. [#1218](https://github.com/async-graphql/async-graphql/pull/1218)
+- fixes interface type condition query [#1228](https://github.com/async-graphql/async-graphql/pull/1228)
+- fixes [#1226](https://github.com/async-graphql/async-graphql/issues/1226)
+- update MSRV to `1.64.0`
+
 # [5.0.5] 2023-01-03
 
 - dynamic schema: add boxed_any function [#1179](https://github.com/async-graphql/async-graphql/pull/1179)

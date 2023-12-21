@@ -3,25 +3,22 @@ use std::collections::HashMap;
 use handlebars::Handlebars;
 use serde::Serialize;
 
+use crate::http::graphiql_plugin::GraphiQLPlugin;
+
 /// Indicates whether the user agent should send or receive user credentials
 /// (cookies, basic http auth, etc.) from the other domain in the case of
 /// cross-origin requests.
-#[derive(Serialize)]
+#[derive(Debug, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Credentials {
     /// Send user credentials if the URL is on the same origin as the calling
     /// script. This is the default value.
+    #[default]
     SameOrigin,
     /// Always send user credentials, even for cross-origin calls.
     Include,
     /// Never send or receive user credentials.
     Omit,
-}
-
-impl Default for Credentials {
-    fn default() -> Self {
-        Credentials::SameOrigin
-    }
 }
 
 /// A builder for constructing a GraphiQL (v2) HTML page.
@@ -45,6 +42,7 @@ pub struct GraphiQLSource<'a> {
     headers: Option<HashMap<&'a str, &'a str>>,
     title: Option<&'a str>,
     credentials: Credentials,
+    plugins: &'a [GraphiQLPlugin<'a>],
 }
 
 impl<'a> GraphiQLSource<'a> {
@@ -94,6 +92,11 @@ impl<'a> GraphiQLSource<'a> {
             credentials,
             ..self
         }
+    }
+
+    /// Sets plugins
+    pub fn plugins(self, plugins: &'a [GraphiQLPlugin]) -> GraphiQLSource<'a> {
+        GraphiQLSource { plugins, ..self }
     }
 
     /// Returns a GraphiQL (v2) HTML page.
@@ -272,12 +275,14 @@ mod tests {
 
     #[test]
     fn test_with_all_options() {
+        use crate::http::graphiql_plugin_explorer;
         let graphiql_source = GraphiQLSource::build()
             .endpoint("/")
             .subscription_endpoint("/ws")
             .header("Authorization", "Bearer [token]")
             .title("Awesome GraphiQL IDE Test")
             .credentials(Credentials::Include)
+            .plugins(&[graphiql_plugin_explorer()])
             .finish();
 
         assert_eq!(
@@ -314,6 +319,7 @@ mod tests {
     ></script>
     <link rel="icon" href="https://graphql.org/favicon.ico">
     <link rel="stylesheet" href="https://unpkg.com/graphiql/graphiql.min.css" />
+    <link rel="stylesheet" href="https://unpkg.com/@graphiql/plugin-explorer/dist/style.css" />
   </head>
 
   <body>
@@ -321,6 +327,10 @@ mod tests {
     <script
       src="https://unpkg.com/graphiql/graphiql.min.js"
       type="application/javascript"
+    ></script>
+    <script
+      src="https://unpkg.com/@graphiql/plugin-explorer/dist/index.umd.js"
+      crossorigin
     ></script>
     <script>
       customFetch = (url, opts = {}) => {
@@ -335,17 +345,21 @@ mod tests {
         return url.toString();
       }
 
+      const plugins = [];
+      plugins.push(GraphiQLPluginExplorer.explorerPlugin());
+
       ReactDOM.render(
         React.createElement(GraphiQL, {
           fetcher: GraphiQL.createFetcher({
             url: createUrl('/'),
             fetch: customFetch,
             subscriptionUrl: createUrl('/ws', true),
-            headers: { 
-              'Authorization': 'Bearer [token]', 
+            headers: {
+              'Authorization': 'Bearer [token]',
             },
           }),
           defaultEditorToolsVisibility: true,
+          plugins,
         }),
         document.getElementById("graphiql")
       );

@@ -1,10 +1,13 @@
 //! A helper module that supports HTTP
 
 #[cfg(feature = "graphiql")]
+mod graphiql_plugin;
+#[cfg(feature = "graphiql")]
 mod graphiql_source;
 #[cfg(feature = "graphiql")]
 mod graphiql_v2_source;
 mod multipart;
+mod multipart_subscribe;
 #[cfg(feature = "playground")]
 mod playground_source;
 mod websocket;
@@ -13,11 +16,14 @@ use std::io::ErrorKind;
 
 use futures_util::io::{AsyncRead, AsyncReadExt};
 #[cfg(feature = "graphiql")]
+pub use graphiql_plugin::{graphiql_plugin_explorer, GraphiQLPlugin};
+#[cfg(feature = "graphiql")]
 pub use graphiql_source::graphiql_source;
 #[cfg(feature = "graphiql")]
 pub use graphiql_v2_source::{Credentials, GraphiQLSource};
 use mime;
 pub use multipart::MultipartOptions;
+pub use multipart_subscribe::{create_multipart_mixed_stream, is_accept_multipart_mixed};
 #[cfg(feature = "playground")]
 pub use playground_source::{playground_source, GraphQLPlaygroundConfig};
 use serde::Deserialize;

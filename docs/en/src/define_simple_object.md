@@ -52,7 +52,7 @@ impl MyObj {
 
 ## Generic `SimpleObject`s
 
-If you want to reuse an `SimpleObject` for other types, you can define a generic SimpleObject
+If you want to reuse a `SimpleObject` for other types, you can define a generic SimpleObject
 and specify how its concrete types should be implemented.
 
 In the following example, two `SimpleObject` types are created:
@@ -124,5 +124,35 @@ You can pass multiple generic types to `params()`, separated by a comma.
 struct MyObj {
     a: i32,
     b: i32,
+}
+```
+
+## Flatten fields
+
+You can flatten fields by adding `#[graphql(flatten)]`, i.e.:
+
+```rust
+# extern crate async_graphql;
+# use async_graphql::*;
+#[derive(SimpleObject)]
+pub struct ChildObject {
+    b: String,
+    c: String,
+}
+
+#[derive(SimpleObject)]
+pub struct ParentObject {
+    a: String,
+    #[graphql(flatten)]
+    child: ChildObject,
+}
+
+// Is the same as
+
+#[derive(SimpleObject)]
+pub struct Object {
+    a: String,
+    b: String,
+    c: String,
 }
 ```

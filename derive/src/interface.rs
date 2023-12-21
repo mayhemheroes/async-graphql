@@ -165,10 +165,6 @@ pub fn generate(interface_args: &args::Interface) -> GeneratorResult<TokenStream
                 method_name,
             )
         };
-        let ty = match syn::parse_str::<syn::Type>(&ty.value()) {
-            Ok(ty) => ty,
-            Err(_) => return Err(Error::new_spanned(ty, "Expect type").into()),
-        };
         let mut calls = Vec::new();
         let mut use_params = Vec::new();
         let mut decl_params = Vec::new();
@@ -196,26 +192,25 @@ pub fn generate(interface_args: &args::Interface) -> GeneratorResult<TokenStream
         decl_params.push(quote! { ctx: &'ctx #crate_name::Context<'ctx> });
         use_params.push(quote! { ctx });
 
-        for InterfaceFieldArgument {
-            name,
-            desc,
-            ty,
-            default,
-            default_with,
-            visible,
-            inaccessible,
-            tags,
-            secret,
-        } in args
+        for (
+            i,
+            InterfaceFieldArgument {
+                name,
+                desc,
+                ty,
+                default,
+                default_with,
+                visible,
+                inaccessible,
+                tags,
+                secret,
+            },
+        ) in args.iter().enumerate()
         {
-            let ident = Ident::new_raw(name, Span::call_site());
+            let ident = Ident::new(&format!("arg{}", i), Span::call_site());
             let name = interface_args
                 .rename_args
                 .rename(name, RenameTarget::Argument);
-            let ty = match syn::parse_str::<syn::Type>(&ty.value()) {
-                Ok(ty) => ty,
-                Err(_) => return Err(Error::new_spanned(ty, "Expect type").into()),
-            };
             decl_params.push(quote! { #ident: #ty });
             use_params.push(quote! { #ident });
 
@@ -276,7 +271,7 @@ pub fn generate(interface_args: &args::Interface) -> GeneratorResult<TokenStream
             .unwrap_or_else(|| quote! {::std::option::Option::None});
         let deprecation = gen_deprecation(deprecation, &crate_name);
 
-        let oty = OutputType::parse(&ty)?;
+        let oty = OutputType::parse(ty)?;
         let ty = match oty {
             OutputType::Value(ty) => ty,
             OutputType::Result(_, ty) => ty,
@@ -319,6 +314,7 @@ pub fn generate(interface_args: &args::Interface) -> GeneratorResult<TokenStream
                 override_from: #override_from,
                 visible: #visible,
                 compute_complexity: ::std::option::Option::None,
+                directive_invocations: ::std::vec![],
             });
         });
 

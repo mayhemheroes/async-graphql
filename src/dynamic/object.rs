@@ -44,7 +44,9 @@ pub struct Object {
     keys: Vec<String>,
     extends: bool,
     shareable: bool,
+    resolvable: bool,
     inaccessible: bool,
+    interface_object: bool,
     tags: Vec<String>,
 }
 
@@ -60,7 +62,9 @@ impl Object {
             keys: Vec::new(),
             extends: false,
             shareable: false,
+            resolvable: true,
             inaccessible: false,
+            interface_object: false,
             tags: Vec::new(),
         }
     }
@@ -69,6 +73,7 @@ impl Object {
     impl_set_extends!();
     impl_set_shareable!();
     impl_set_inaccessible!();
+    impl_set_interface_object!();
     impl_set_tags!();
 
     /// Add an field to the object
@@ -121,6 +126,30 @@ impl Object {
         self
     }
 
+    /// Make the entity unresolvable by the current subgraph
+    ///
+    /// Most commonly used to reference an entity without contributing fields.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_graphql::{dynamic::*, Value};
+    ///
+    /// let obj = Object::new("MyObj")
+    ///     .field(Field::new("a", TypeRef::named(TypeRef::INT), |_| {
+    ///         FieldFuture::new(async move { Ok(Some(Value::from(10))) })
+    ///     }))
+    ///     .unresolvable("a");
+    /// ```
+    ///
+    /// This references the `MyObj` entity with the key `a` that cannot be
+    /// resolved by the current subgraph.
+    pub fn unresolvable(mut self, fields: impl Into<String>) -> Self {
+        self.resolvable = false;
+        self.keys.push(fields.into());
+        self
+    }
+
     /// Returns the type name
     #[inline]
     pub fn type_name(&self) -> &str {
@@ -155,6 +184,7 @@ impl Object {
                     tags: field.tags.clone(),
                     override_from: field.override_from.clone(),
                     compute_complexity: None,
+                    directive_invocations: vec![],
                 },
             );
         }
@@ -168,6 +198,7 @@ impl Object {
                 cache_control: Default::default(),
                 extends: self.extends,
                 shareable: self.shareable,
+                resolvable: self.resolvable,
                 keys: if !self.keys.is_empty() {
                     Some(self.keys.clone())
                 } else {
@@ -175,9 +206,11 @@ impl Object {
                 },
                 visible: None,
                 inaccessible: self.inaccessible,
+                interface_object: self.interface_object,
                 tags: self.tags.clone(),
                 is_subscription: false,
                 rust_typename: None,
+                directive_invocations: vec![],
             },
         );
 
@@ -186,6 +219,11 @@ impl Object {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    pub(crate) fn is_entity(&self) -> bool {
+        !self.keys.is_empty()
     }
 }
 

@@ -413,7 +413,7 @@ pub async fn test_entity_inaccessible() {
     }
 
     #[derive(Interface)]
-    #[graphql(field(name = "inaccessible_interface_value", type = "String", inaccessible))]
+    #[graphql(field(name = "inaccessible_interface_value", ty = "String", inaccessible))]
     #[graphql(inaccessible)]
     enum MyInterfaceInaccessible {
         MyInterfaceObjA(MyInterfaceObjA),
@@ -693,7 +693,7 @@ pub async fn test_entity_tag() {
     #[derive(Interface)]
     #[graphql(field(
         name = "tagged_interface_value",
-        type = "String",
+        ty = "String",
         tag = "tagged_interface_field"
     ))]
     #[graphql(tag = "tagged_interface")]
@@ -825,4 +825,168 @@ pub async fn test_entity_tag() {
         std::fs::write(path, schema_sdl).unwrap();
         panic!("schema was not up-to-date. rerun")
     }
+}
+
+#[tokio::test]
+pub async fn test_interface_object() {
+    #[derive(SimpleObject)]
+    struct VariantA {
+        pub id: u64,
+    }
+
+    #[derive(Interface)]
+    #[graphql(field(name = "id", ty = "&u64"))]
+    enum MyInterface {
+        VariantA(VariantA),
+    }
+
+    #[derive(SimpleObject)]
+    #[graphql(interface_object)]
+    struct MyInterfaceObject1 {
+        pub id: u64,
+    }
+
+    struct MyInterfaceObject2;
+
+    #[Object(interface_object)]
+    impl MyInterfaceObject2 {
+        pub async fn id(&self) -> u64 {
+            todo!()
+        }
+    }
+
+    struct Query;
+
+    #[Object(extends)]
+    impl Query {
+        #[graphql(entity)]
+        async fn my_interface(&self, _id: u64) -> MyInterface {
+            todo!()
+        }
+
+        #[graphql(entity)]
+        async fn my_interface_object1(&self, _id: u64) -> MyInterfaceObject1 {
+            todo!()
+        }
+
+        #[graphql(entity)]
+        async fn my_interface_object2(&self, _id: u64) -> MyInterfaceObject2 {
+            todo!()
+        }
+    }
+
+    let schema_sdl = Schema::new(Query, EmptyMutation, EmptySubscription)
+        .sdl_with_options(SDLExportOptions::new().federation());
+
+    // Interface with @key directive
+    assert!(schema_sdl.contains("interface MyInterface @key(fields: \"id\")"));
+
+    // Object with @interfaceObject directive
+    assert!(schema_sdl.contains("type MyInterfaceObject1 @key(fields: \"id\") @interfaceObject"));
+    assert!(schema_sdl.contains("type MyInterfaceObject2 @key(fields: \"id\") @interfaceObject"));
+}
+
+#[tokio::test]
+pub async fn test_unresolvable_entity() {
+    #[derive(SimpleObject)]
+    struct ResolvableObject {
+        id: u64,
+    }
+
+    #[derive(SimpleObject)]
+    #[graphql(unresolvable = "id")]
+    struct SimpleExplicitUnresolvable {
+        id: u64,
+    }
+
+    #[derive(SimpleObject)]
+    #[graphql(unresolvable)]
+    struct SimpleImplicitUnresolvable {
+        a: u64,
+        #[graphql(skip)]
+        _skipped: bool,
+    }
+
+    struct ExplicitUnresolvable;
+
+    #[Object(unresolvable = "id1 id2")]
+    impl ExplicitUnresolvable {
+        async fn id1(&self) -> u64 {
+            todo!()
+        }
+
+        async fn id2(&self) -> u64 {
+            todo!()
+        }
+    }
+
+    struct ImplicitUnresolvable;
+
+    #[Object(unresolvable)]
+    impl ImplicitUnresolvable {
+        async fn a(&self) -> &'static str {
+            todo!()
+        }
+
+        async fn b(&self) -> bool {
+            todo!()
+        }
+
+        #[graphql(skip)]
+        async fn _skipped(&self) {}
+    }
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn simple_explicit_reference(&self, _id: u64) -> SimpleExplicitUnresolvable {
+            todo!()
+        }
+
+        async fn simple_implicit_reference(&self, _a: u64) -> SimpleImplicitUnresolvable {
+            todo!()
+        }
+
+        async fn explicit_reference(&self, _id1: u64, _id2: u64) -> ExplicitUnresolvable {
+            todo!()
+        }
+
+        async fn implicit_unresolvable(&self, _a: String, _b: bool) -> ImplicitUnresolvable {
+            todo!()
+        }
+
+        #[graphql(entity)]
+        async fn object_entity(&self, _id: u64) -> ResolvableObject {
+            todo!()
+        }
+    }
+
+    let schema = Schema::new(Query, EmptyMutation, EmptySubscription);
+    let schema_sdl = schema.sdl_with_options(SDLExportOptions::new().federation());
+
+    assert!(schema_sdl.contains(r#"type ResolvableObject @key(fields: "id")"#));
+    assert!(schema_sdl
+        .contains(r#"type SimpleExplicitUnresolvable @key(fields: "id", resolvable: false)"#));
+    assert!(schema_sdl
+        .contains(r#"type SimpleImplicitUnresolvable @key(fields: "a", resolvable: false)"#));
+    assert!(schema_sdl
+        .contains(r#"type ExplicitUnresolvable @key(fields: "id1 id2", resolvable: false)"#));
+    assert!(
+        schema_sdl.contains(r#"type ImplicitUnresolvable @key(fields: "a b", resolvable: false)"#)
+    );
+
+    let query = r#"{
+            __type(name: "_Entity") { possibleTypes { name } }
+        }"#;
+    assert_eq!(
+        schema.execute(query).await.into_result().unwrap().data,
+        value!({
+            "__type": {
+                "possibleTypes": [
+                    {"name": "ResolvableObject"},
+                ]
+            }
+        })
+    );
 }

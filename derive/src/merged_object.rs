@@ -5,8 +5,8 @@ use quote::quote;
 use syn::{Error, LitInt};
 
 use crate::{
-    args::{self, RenameTarget},
-    utils::{get_crate_name, get_rustdoc, visible_fn, GeneratorResult},
+    args::{self, RenameTarget, TypeDirectiveLocation},
+    utils::{gen_directive_calls, get_crate_name, get_rustdoc, visible_fn, GeneratorResult},
 };
 
 pub fn generate(object_args: &args::MergedObject) -> GeneratorResult<TokenStream> {
@@ -16,6 +16,7 @@ pub fn generate(object_args: &args::MergedObject) -> GeneratorResult<TokenStream
     let extends = object_args.extends;
     let shareable = object_args.shareable;
     let inaccessible = object_args.inaccessible;
+    let interface_object = object_args.interface_object;
     let tags = object_args
         .tags
         .iter()
@@ -30,6 +31,8 @@ pub fn generate(object_args: &args::MergedObject) -> GeneratorResult<TokenStream
     } else {
         quote!(<Self as #crate_name::TypeName>::type_name())
     };
+
+    let directives = gen_directive_calls(&object_args.directives, TypeDirectiveLocation::Object);
 
     let desc = get_rustdoc(&object_args.attrs)?
         .map(|s| quote! { ::std::option::Option::Some(::std::string::ToString::to_string(#s)) })
@@ -116,12 +119,15 @@ pub fn generate(object_args: &args::MergedObject) -> GeneratorResult<TokenStream
                         cache_control,
                         extends: #extends,
                         shareable: #shareable,
+                        resolvable: true,
                         inaccessible: #inaccessible,
+                        interface_object: #interface_object,
                         tags: ::std::vec![ #(#tags),* ],
                         keys: ::std::option::Option::None,
                         visible: #visible,
                         is_subscription: false,
                         rust_typename: ::std::option::Option::Some(::std::any::type_name::<Self>()),
+                        directive_invocations: ::std::vec![ #(#directives),* ],
                     }
                 })
             }

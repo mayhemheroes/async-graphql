@@ -160,6 +160,7 @@ pub fn generate(
                     },
                     is_repeatable: #repeatable,
                     visible: #visible,
+                    composable: None,
                 };
                 registry.add_directive(meta);
             }

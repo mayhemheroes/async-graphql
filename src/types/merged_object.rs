@@ -78,12 +78,15 @@ where
                 cache_control: cc,
                 extends: false,
                 shareable: false,
+                resolvable: true,
                 keys: None,
                 visible: None,
                 inaccessible: false,
+                interface_object: false,
                 tags: Default::default(),
                 is_subscription: false,
                 rust_typename: Some(std::any::type_name::<Self>()),
+                directive_invocations: Default::default(),
             }
         })
     }
@@ -139,12 +142,15 @@ where
                 cache_control: cc,
                 extends: false,
                 shareable: false,
+                resolvable: true,
                 keys: None,
                 visible: None,
                 inaccessible: false,
+                interface_object: false,
                 tags: Default::default(),
                 is_subscription: false,
                 rust_typename: Some(std::any::type_name::<Self>()),
+                directive_invocations: Default::default(),
             }
         })
     }
@@ -175,12 +181,15 @@ impl SubscriptionType for MergedObjectTail {
             cache_control: Default::default(),
             extends: false,
             shareable: false,
+            resolvable: true,
             keys: None,
             visible: None,
             inaccessible: false,
+            interface_object: false,
             tags: Default::default(),
             is_subscription: false,
             rust_typename: Some(std::any::type_name::<Self>()),
+            directive_invocations: Default::default(),
         })
     }
 

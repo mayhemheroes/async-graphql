@@ -6,24 +6,27 @@ documentation = "https://docs.rs/async-graphql-actix-web/"
 edition = "2021"
 homepage = "https://github.com/async-graphql/async-graphql"
 keywords = ["futures", "async", "graphql"]
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 name = "async-graphql-actix-web"
 repository = "https://github.com/async-graphql/async-graphql"
-version = "5.0.5"
+version = "6.0.11"
 
 [dependencies]
-async-graphql = { path = "../..", version = "5.0.5", default-features = false, features = ["playground"] }
+async-graphql.workspace = true
 
 actix = "0.13.0"
 actix-http = "3.1.0"
-actix-web = { version = "4.1.0", default-features = false }
+actix-web = { version = "4.1.0", default-features = false, features = [
+    "http2",
+] }
 actix-web-actors = "4.1.0"
 async-channel = "1.6.1"
 futures-channel = "0.3.13"
 futures-util = { version = "0.3.0", default-features = false }
 serde_cbor = { version = "0.11.2", optional = true }
-serde_json = "1.0.64"
-thiserror = "1.0.30"
+serde_json.workspace = true
+thiserror.workspace = true
+async-stream = "0.3.0"
 
 [features]
 cbor = ["serde_cbor"]

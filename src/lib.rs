@@ -28,7 +28,6 @@
 //!
 //! ## Documentation
 //!
-//! * [Feature Comparison](https://github.com/async-graphql/async-graphql/blob/master/feature-comparison.md)
 //! * [Book](https://async-graphql.github.io/async-graphql/en/index.html)
 //! * [中文文档](https://async-graphql.github.io/async-graphql/zh-CN/index.html)
 //! * [Docs](https://docs.rs/async-graphql)
@@ -92,6 +91,10 @@
 //! - `fast_chemail`: Integrate with the [`fast_chemail` crate](https://crates.io/crates/fast_chemail).
 //! - `tempfile`: Save the uploaded content in the temporary file.
 //! - `dynamic-schema`: Support dynamic schema.
+//! - `graphiql`: Enables the [GraphiQL IDE](https://github.com/graphql/graphiql)
+//!   integration
+//! - `playground`: Enables the [GraphQL playground IDE](https://github.com/graphql/graphql-playground)
+//!   integration
 //!
 //! ## Integrations
 //!
@@ -174,6 +177,7 @@
 #![allow(clippy::redundant_pub_crate)]
 #![allow(clippy::cognitive_complexity)]
 #![allow(clippy::useless_let_if_seq)]
+#![allow(clippy::uninlined_format_args)]
 #![warn(missing_docs)]
 #![allow(clippy::trivially_copy_pass_by_ref)]
 #![allow(clippy::upper_case_acronyms)]
@@ -227,7 +231,7 @@ pub use base::{
 #[doc(hidden)]
 pub use context::ContextSelectionSet;
 pub use context::*;
-pub use custom_directive::{CustomDirective, CustomDirectiveFactory};
+pub use custom_directive::{CustomDirective, CustomDirectiveFactory, TypeDirective};
 pub use error::{
     Error, ErrorExtensionValues, ErrorExtensions, InputValueError, InputValueResult,
     ParseRequestError, PathSegment, Result, ResultExt, ServerError, ServerResult,
@@ -291,5 +295,6 @@ pub use async_graphql_derive::Scalar;
 pub use async_graphql_derive::SimpleObject;
 #[doc = include_str!("docs/subscription.md")]
 pub use async_graphql_derive::Subscription;
+pub use async_graphql_derive::TypeDirective;
 #[doc = include_str!("docs/union.md")]
 pub use async_graphql_derive::Union;

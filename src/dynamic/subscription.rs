@@ -162,6 +162,7 @@ impl Subscription {
                     tags: vec![],
                     override_from: None,
                     compute_complexity: None,
+                    directive_invocations: vec![],
                 },
             );
         }
@@ -175,12 +176,15 @@ impl Subscription {
                 cache_control: Default::default(),
                 extends: false,
                 shareable: false,
+                resolvable: true,
                 keys: None,
                 visible: None,
                 inaccessible: false,
+                interface_object: false,
                 tags: vec![],
                 is_subscription: true,
                 rust_typename: None,
+                directive_invocations: vec![],
             },
         );
 
@@ -241,7 +245,7 @@ impl Subscription {
                                         alias: field.node.alias.as_ref().map(|alias| alias.node.as_str()),
                                         is_for_introspection: false,
                                     };
-                                    let resolve_fut = resolve(&schema, &ctx_field, &field_type.0, Some(&value));
+                                    let resolve_fut = resolve(&schema, &ctx_field, &field_type, Some(&value));
                                     futures_util::pin_mut!(resolve_fut);
                                     let value = ctx_field.query_env.extensions.resolve(ri, &mut resolve_fut).await;
 

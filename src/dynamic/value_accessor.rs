@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 
-use crate::{Error, Name, Result, Value};
+use crate::{Error, Name, Result, Upload, Value};
 
 /// A value accessor
 pub struct ValueAccessor<'a>(&'a Value);
@@ -73,7 +73,7 @@ impl<'a> ValueAccessor<'a> {
     }
 
     /// Returns the string value
-    pub fn string(&self) -> Result<&str> {
+    pub fn string(&self) -> Result<&'a str> {
         if let Value::String(value) = self.0 {
             Ok(value)
         } else {
@@ -82,16 +82,16 @@ impl<'a> ValueAccessor<'a> {
     }
 
     /// Returns the object accessor
-    pub fn object(&self) -> Result<ObjectAccessor<'_>> {
+    pub fn object(&self) -> Result<ObjectAccessor<'a>> {
         if let Value::Object(obj) = self.0 {
             Ok(ObjectAccessor(Cow::Borrowed(obj)))
         } else {
-            Err(Error::new("internal: not a string"))
+            Err(Error::new("internal: not an object"))
         }
     }
 
     /// Returns the list accessor
-    pub fn list(&self) -> Result<ListAccessor<'_>> {
+    pub fn list(&self) -> Result<ListAccessor<'a>> {
         if let Value::List(list) = self.0 {
             Ok(ListAccessor(list))
         } else {
@@ -103,6 +103,18 @@ impl<'a> ValueAccessor<'a> {
     pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T> {
         T::deserialize(self.0.clone()).map_err(|err| format!("internal: {}", err).into())
     }
+
+    /// Returns a reference to the underlying `Value`
+    #[inline]
+    pub fn as_value(&self) -> &'a Value {
+        self.0
+    }
+
+    /// Returns a upload object
+    pub fn upload(&self) -> Result<Upload> {
+        <Upload as crate::InputType>::parse(Some(self.0.clone()))
+            .map_err(|_| Error::new("internal: not a upload"))
+    }
 }
 
 /// A object accessor
@@ -112,13 +124,13 @@ impl<'a> ObjectAccessor<'a> {
     /// Return a reference to the value stored for `key`, if it is present,
     /// else `None`.
     #[inline]
-    pub fn get(&'a self, name: &str) -> Option<ValueAccessor<'a>> {
+    pub fn get(&self, name: &str) -> Option<ValueAccessor<'_>> {
         self.0.get(name).map(ValueAccessor)
     }
 
     /// Like [`ObjectAccessor::get`], returns `Err` if the index does not exist
     #[inline]
-    pub fn try_get(&'a self, name: &str) -> Result<ValueAccessor<'a>> {
+    pub fn try_get(&self, name: &str) -> Result<ValueAccessor<'_>> {
         self.0
             .get(name)
             .map(ValueAccessor)
@@ -128,10 +140,40 @@ impl<'a> ObjectAccessor<'a> {
     /// Return an iterator over the key-value pairs of the object, in their
     /// order
     #[inline]
-    pub fn iter(&'a self) -> impl Iterator<Item = (&Name, ValueAccessor<'_>)> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = (&Name, ValueAccessor<'_>)> + '_ {
         self.0
             .iter()
             .map(|(name, value)| (name, ValueAccessor(value)))
+    }
+
+    /// Return an iterator over the keys of the object, in their order
+    #[inline]
+    pub fn keys(&self) -> impl Iterator<Item = &Name> + '_ {
+        self.0.keys()
+    }
+
+    /// Return an iterator over the values of the object, in their order
+    #[inline]
+    pub fn values(&self) -> impl Iterator<Item = ValueAccessor<'_>> + '_ {
+        self.0.values().map(ValueAccessor)
+    }
+
+    /// Returns the number of elements in the object
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` if the object has no members
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns a reference to the underlying IndexMap
+    #[inline]
+    pub fn as_index_map(&'a self) -> &'a IndexMap<Name, Value> {
+        &self.0
     }
 }
 
@@ -153,20 +195,36 @@ impl<'a> ListAccessor<'a> {
 
     /// Returns an iterator over the list
     #[inline]
-    pub fn iter(&'a self) -> impl Iterator<Item = ValueAccessor<'_>> + 'a {
+    pub fn iter(&self) -> impl Iterator<Item = ValueAccessor<'_>> + '_ {
         self.0.iter().map(ValueAccessor)
     }
 
     /// Returns a reference to an element depending on the index
     #[inline]
-    pub fn get(&self, idx: usize) -> Option<ValueAccessor<'a>> {
+    pub fn get(&self, idx: usize) -> Option<ValueAccessor<'_>> {
         self.0.get(idx).map(ValueAccessor)
     }
 
     /// Like [`ListAccessor::get`], returns `Err` if the index does not exist
     #[inline]
-    pub fn try_get(&self, idx: usize) -> Result<ValueAccessor<'a>> {
+    pub fn try_get(&self, idx: usize) -> Result<ValueAccessor<'_>> {
         self.get(idx)
             .ok_or_else(|| Error::new(format!("internal: index \"{}\" not found", idx)))
+    }
+
+    /// Returns a new ListAccessor that represents a slice of the original
+    #[inline]
+    pub fn as_slice(&self, start: usize, end: usize) -> Result<ListAccessor<'a>> {
+        if start <= end && end <= self.len() {
+            Ok(ListAccessor(&self.0[start..end]))
+        } else {
+            Err(Error::new("internal: invalid slice indices"))
+        }
+    }
+
+    /// Returns a reference to the underlying `&[Value]`
+    #[inline]
+    pub fn as_values_slice(&self) -> &'a [Value] {
+        self.0
     }
 }

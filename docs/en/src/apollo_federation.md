@@ -132,6 +132,50 @@ type Key {
 }
 ```
 
+### Creating unresolvable entities
+
+There are certain times when you need to reference an entity, but not add any fields to it. This is particularly useful when you want to link data from separate subgraphs together, but neither subgraph has all the data.
+
+If you wanted to implement the [products and reviews subgraphs example](https://www.apollographql.com/docs/federation/entities/#referencing-an-entity-without-contributing-fields) from the Apollo Docs, you would create the following types for the reviews subgraph:
+
+```rust
+# extern crate async_graphql;
+# use async_graphql::*;
+#[derive(SimpleObject)]
+struct Review {
+    product: Product,
+    score: u64,
+}
+
+#[derive(SimpleObject)]
+#[graphql(unresolvable)]
+struct Product {
+    id: u64,
+}
+```
+
+This will add the `@key(fields: "id", resolvable: false)` directive to the `Product` type in the reviews subgraph.
+
+For more complex entity keys, such as ones with nested fields in compound keys, you can override the fields in the directive as so:
+
+```rust
+# extern crate async_graphql;
+# use async_graphql::*;
+#[derive(SimpleObject)]
+#[graphql(unresolvable = "id organization { id }")]
+struct User {
+    id: u64,
+    organization: Organization,
+}
+
+#[derive(SimpleObject)]
+struct Organization {
+    id: u64,
+}
+```
+
+However, it is important to note that no validation will be done to check that these fields exist.
+
 ## `@shareable`
 
 Apply the [`@shareable` directive](https://www.apollographql.com/docs/federation/federated-types/federated-directives#shareable) to a type or field to indicate that multiple subgraphs can resolve it.
@@ -447,6 +491,30 @@ struct User {
   id: ID,
   name: String,
 }
+```
+
+## `@composeDirective`
+
+The [`@composeDirective` directive](https://www.apollographql.com/docs/federation/federation-spec/#composedirective) is used to add a custom type system directive to the supergraph schema. Without `@composeDirective`, and [custom type system directives](./custom_directive#type-system-directives) are omitted from the composed supergraph schema. To include a custom type system directive as a composed directive, just add the `composable` attribute to the `#[TypeDirective]` macro:
+
+```rust
+# extern crate async_graphql;
+# use async_graphql::*;
+#[TypeDirective(
+    location = "Object",
+    composable = "https://custom.spec.dev/extension/v1.0",
+)]
+fn custom() {}
+```
+
+In addition to the [normal type system directive behavior](./custom_directive#type-system-directives), this will add the following bits to the output schema:
+
+```graphql
+extend schema @link(
+	url: "https://custom.spec.dev/extension/v1.0"
+	import: ["@custom"]
+)
+	@composeDirective(name: "@custom")
 ```
 
 [`@key`]: https://www.apollographql.com/docs/federation/entities#1-define-a-key

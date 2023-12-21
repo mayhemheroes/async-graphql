@@ -141,7 +141,7 @@ pub struct Interface {
     pub(crate) description: Option<String>,
     pub(crate) fields: IndexMap<String, InterfaceField>,
     pub(crate) implements: IndexSet<String>,
-    pub(crate) keys: Vec<String>,
+    keys: Vec<String>,
     extends: bool,
     inaccessible: bool,
     tags: Vec<String>,
@@ -207,6 +207,11 @@ impl Interface {
         &self.name
     }
 
+    #[inline]
+    pub(crate) fn is_entity(&self) -> bool {
+        !self.keys.is_empty()
+    }
+
     pub(crate) fn register(&self, registry: &mut Registry) -> Result<(), SchemaError> {
         let mut fields = IndexMap::new();
 
@@ -235,6 +240,7 @@ impl Interface {
                     tags: field.tags.clone(),
                     override_from: field.override_from.clone(),
                     compute_complexity: None,
+                    directive_invocations: vec![],
                 },
             );
         }
@@ -387,6 +393,49 @@ mod tests {
                 path: vec![PathSegment::Field("valueA".to_owned())],
                 extensions: None,
             }]
+        );
+    }
+    #[tokio::test]
+    async fn query_type_condition() {
+        struct MyObjA;
+        let obj_a = Object::new("MyObjA")
+            .implement("MyInterface")
+            .field(Field::new("a", TypeRef::named(TypeRef::INT), |_| {
+                FieldFuture::new(async { Ok(Some(Value::from(100))) })
+            }))
+            .field(Field::new("b", TypeRef::named(TypeRef::INT), |_| {
+                FieldFuture::new(async { Ok(Some(Value::from(200))) })
+            }));
+        let interface = Interface::new("MyInterface")
+            .field(InterfaceField::new("a", TypeRef::named(TypeRef::INT)));
+        let query = Object::new("Query");
+        let query = query.field(Field::new(
+            "valueA",
+            TypeRef::named_nn(obj_a.type_name()),
+            |_| FieldFuture::new(async { Ok(Some(FieldValue::owned_any(MyObjA))) }),
+        ));
+        let schema = Schema::build(query.type_name(), None, None)
+            .register(obj_a)
+            .register(interface)
+            .register(query)
+            .finish()
+            .unwrap();
+        let query = r#"
+        {
+            valueA { __typename
+            b
+            ... on MyInterface { a } }
+        }
+        "#;
+        assert_eq!(
+            schema.execute(query).await.into_result().unwrap().data,
+            value!({
+                "valueA": {
+                    "__typename": "MyObjA",
+                    "b": 200,
+                    "a": 100,
+                }
+            })
         );
     }
 }

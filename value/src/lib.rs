@@ -1,6 +1,7 @@
 //! Value for GraphQL. Used in the [`async-graphql`](https://crates.io/crates/async-graphql) crate.
 
 #![warn(missing_docs)]
+#![allow(clippy::uninlined_format_args)]
 #![forbid(unsafe_code)]
 
 mod deserializer;
@@ -227,6 +228,13 @@ impl From<String> for ConstValue {
     #[inline]
     fn from(value: String) -> Self {
         ConstValue::String(value)
+    }
+}
+
+impl From<&String> for ConstValue {
+    #[inline]
+    fn from(value: &String) -> Self {
+        ConstValue::String(value.clone())
     }
 }
 

@@ -42,11 +42,10 @@ pub struct Tracing;
 
 impl ExtensionFactory for Tracing {
     fn create(&self) -> Arc<dyn Extension> {
-        Arc::new(TracingExtension::default())
+        Arc::new(TracingExtension)
     }
 }
 
-#[derive(Default)]
 struct TracingExtension;
 
 #[async_trait::async_trait]
@@ -85,14 +84,13 @@ impl Extension for TracingExtension {
             target: "async_graphql::graphql",
             Level::INFO,
             "parse",
+            source = tracinglib::field::Empty
         );
         async move {
             let res = next.run(ctx, query, variables).await;
             if let Ok(doc) = &res {
-                tracinglib::Span::current().record(
-                    "source",
-                    &ctx.stringify_execute_doc(doc, variables).as_str(),
-                );
+                tracinglib::Span::current()
+                    .record("source", ctx.stringify_execute_doc(doc, variables).as_str());
             }
             res
         }

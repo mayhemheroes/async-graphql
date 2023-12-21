@@ -1,14 +1,11 @@
-use std::fmt::{self, Display, Formatter};
-
 use darling::{
-    ast::{Data, Fields},
+    ast::{Data, Fields, NestedMeta},
     util::{Ignored, SpannedValue},
     FromDeriveInput, FromField, FromMeta, FromVariant,
 };
 use inflector::Inflector;
-use syn::{
-    Attribute, Generics, Ident, Lit, LitBool, LitStr, Meta, NestedMeta, Path, Type, Visibility,
-};
+use quote::format_ident;
+use syn::{Attribute, Expr, Generics, Ident, Lit, LitBool, LitStr, Meta, Path, Type, Visibility};
 
 use crate::validators::Validators;
 
@@ -94,16 +91,13 @@ pub struct ConcreteType {
     pub params: PathList,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Deprecation {
+    #[default]
     NoDeprecated,
-    Deprecated { reason: Option<String> },
-}
-
-impl Default for Deprecation {
-    fn default() -> Self {
-        Deprecation::NoDeprecated
-    }
+    Deprecated {
+        reason: Option<String>,
+    },
 }
 
 impl FromMeta for Deprecation {
@@ -117,6 +111,32 @@ impl FromMeta for Deprecation {
             Lit::Bool(LitBool { value: false, .. }) => Ok(Deprecation::NoDeprecated),
             Lit::Str(str) => Ok(Deprecation::Deprecated {
                 reason: Some(str.value()),
+            }),
+            _ => Err(darling::Error::unexpected_lit_type(value)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum Resolvability {
+    #[default]
+    Resolvable,
+    Unresolvable {
+        key: Option<String>,
+    },
+}
+
+impl FromMeta for Resolvability {
+    fn from_word() -> darling::Result<Self> {
+        Ok(Resolvability::Unresolvable { key: None })
+    }
+
+    fn from_value(value: &Lit) -> darling::Result<Self> {
+        match value {
+            Lit::Bool(LitBool { value: true, .. }) => Ok(Resolvability::Unresolvable { key: None }),
+            Lit::Bool(LitBool { value: false, .. }) => Ok(Resolvability::Resolvable),
+            Lit::Str(str) => Ok(Resolvability::Unresolvable {
+                key: Some(str.value()),
             }),
             _ => Err(darling::Error::unexpected_lit_type(value)),
         }
@@ -161,13 +181,13 @@ pub struct SimpleObjectField {
     #[darling(default)]
     pub override_from: Option<String>,
     #[darling(default)]
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
     #[darling(default)]
     pub visible: Option<Visible>,
     #[darling(default, multiple)]
     pub derived: Vec<DerivedField>,
     #[darling(default)]
-    pub process_with: Option<String>,
+    pub process_with: Option<Expr>,
     // for InputObject
     #[darling(default)]
     pub default: Option<DefaultValue>,
@@ -179,6 +199,8 @@ pub struct SimpleObjectField {
     pub flatten: bool,
     #[darling(default)]
     pub secret: bool,
+    #[darling(default, multiple, rename = "directive")]
+    pub directives: Vec<Expr>,
 }
 
 #[derive(FromDeriveInput)]
@@ -211,6 +233,8 @@ pub struct SimpleObject {
     pub shareable: bool,
     #[darling(default)]
     pub inaccessible: bool,
+    #[darling(default)]
+    pub interface_object: bool,
     #[darling(default, multiple, rename = "tag")]
     pub tags: Vec<String>,
     #[darling(default)]
@@ -219,11 +243,15 @@ pub struct SimpleObject {
     pub concretes: Vec<ConcreteType>,
     #[darling(default)]
     pub serial: bool,
+    #[darling(default, rename = "unresolvable")]
+    pub resolvability: Resolvability,
     // for InputObject
     #[darling(default)]
     pub input_name: Option<String>,
     #[darling(default)]
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
+    #[darling(default, multiple, rename = "directive")]
+    pub directives: Vec<Expr>,
 }
 
 #[derive(FromMeta, Default)]
@@ -235,7 +263,7 @@ pub struct Argument {
     pub default_with: Option<LitStr>,
     pub validator: Option<Validators>,
     #[darling(default)]
-    pub process_with: Option<String>,
+    pub process_with: Option<Expr>,
     pub key: bool, // for entity
     pub visible: Option<Visible>,
     pub inaccessible: bool,
@@ -256,38 +284,20 @@ pub struct Object {
     pub extends: bool,
     pub shareable: bool,
     pub inaccessible: bool,
+    pub interface_object: bool,
     #[darling(multiple, rename = "tag")]
     pub tags: Vec<String>,
     pub use_type_description: bool,
     pub visible: Option<Visible>,
     pub serial: bool,
+    #[darling(default, rename = "unresolvable")]
+    pub resolvability: Resolvability,
     #[darling(multiple, rename = "concrete")]
     pub concretes: Vec<ConcreteType>,
     #[darling(default)]
-    pub guard: Option<SpannedValue<String>>,
-}
-
-pub enum ComplexityType {
-    Const(usize),
-    Fn(String),
-}
-
-impl FromMeta for ComplexityType {
-    fn from_value(value: &Lit) -> darling::Result<Self> {
-        match value {
-            Lit::Int(n) => {
-                let n = n.base10_parse::<i32>().unwrap();
-                if n < 0 {
-                    return Err(darling::Error::custom(
-                        "The complexity must be greater than or equal to 0.",
-                    ));
-                }
-                Ok(ComplexityType::Const(n as usize))
-            }
-            Lit::Str(s) => Ok(ComplexityType::Fn(s.value())),
-            _ => Err(darling::Error::unexpected_lit_type(value)),
-        }
-    }
+    pub guard: Option<Expr>,
+    #[darling(default, multiple, rename = "directive")]
+    pub directives: Vec<Expr>,
 }
 
 #[derive(FromMeta, Default)]
@@ -306,12 +316,14 @@ pub struct ObjectField {
     #[darling(multiple, rename = "tag")]
     pub tags: Vec<String>,
     pub override_from: Option<String>,
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
     pub visible: Option<Visible>,
-    pub complexity: Option<ComplexityType>,
+    pub complexity: Option<Expr>,
     #[darling(default, multiple)]
     pub derived: Vec<DerivedField>,
     pub flatten: bool,
+    #[darling(default, multiple, rename = "directive")]
+    pub directives: Vec<Expr>,
 }
 
 #[derive(FromMeta, Default, Clone)]
@@ -342,7 +354,7 @@ pub struct Enum {
     #[darling(default)]
     pub rename_items: Option<RenameRule>,
     #[darling(default)]
-    pub remote: Option<String>,
+    pub remote: Option<Type>,
     #[darling(default)]
     pub visible: Option<Visible>,
     #[darling(default)]
@@ -428,7 +440,7 @@ pub struct InputObjectField {
     #[darling(default)]
     pub skip_input: bool,
     #[darling(default)]
-    pub process_with: Option<String>,
+    pub process_with: Option<Expr>,
     // for SimpleObject
     #[darling(default)]
     pub skip_output: bool,
@@ -469,10 +481,12 @@ pub struct InputObject {
     #[darling(default, multiple, rename = "concrete")]
     pub concretes: Vec<ConcreteType>,
     #[darling(default)]
-    pub validator: Option<SpannedValue<String>>,
+    pub validator: Option<Expr>,
     // for SimpleObject
     #[darling(default)]
     pub complex: bool,
+    #[darling(default)]
+    pub shareable: bool,
 }
 
 #[derive(FromVariant)]
@@ -529,8 +543,7 @@ pub struct InterfaceFieldArgument {
     pub name: String,
     #[darling(default)]
     pub desc: Option<String>,
-    #[darling(rename = "type")]
-    pub ty: LitStr,
+    pub ty: Type,
     #[darling(default)]
     pub default: Option<DefaultValue>,
     #[darling(default)]
@@ -548,8 +561,7 @@ pub struct InterfaceFieldArgument {
 #[derive(FromMeta)]
 pub struct InterfaceField {
     pub name: SpannedValue<String>,
-    #[darling(rename = "type")]
-    pub ty: LitStr,
+    pub ty: Type,
     #[darling(default)]
     pub method: Option<String>,
     #[darling(default)]
@@ -640,7 +652,7 @@ pub struct Subscription {
     pub extends: bool,
     pub visible: Option<Visible>,
     #[darling(default)]
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
 }
 
 #[derive(FromMeta, Default)]
@@ -652,7 +664,7 @@ pub struct SubscriptionFieldArgument {
     pub default_with: Option<LitStr>,
     pub validator: Option<Validators>,
     #[darling(default)]
-    pub process_with: Option<String>,
+    pub process_with: Option<Expr>,
     pub visible: Option<Visible>,
     pub secret: bool,
 }
@@ -663,9 +675,9 @@ pub struct SubscriptionField {
     pub skip: bool,
     pub name: Option<String>,
     pub deprecation: Deprecation,
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
     pub visible: Option<Visible>,
-    pub complexity: Option<ComplexityType>,
+    pub complexity: Option<Expr>,
 }
 
 #[derive(FromField)]
@@ -695,12 +707,16 @@ pub struct MergedObject {
     pub shareable: bool,
     #[darling(default)]
     pub inaccessible: bool,
+    #[darling(default)]
+    pub interface_object: bool,
     #[darling(default, multiple, rename = "tag")]
     pub tags: Vec<String>,
     #[darling(default)]
     pub visible: Option<Visible>,
     #[darling(default)]
     pub serial: bool,
+    #[darling(default, multiple, rename = "directive")]
+    pub directives: Vec<Expr>,
 }
 
 #[derive(FromField)]
@@ -860,7 +876,7 @@ pub struct ComplexObject {
     pub internal: bool,
     pub rename_fields: Option<RenameRule>,
     pub rename_args: Option<RenameRule>,
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
 }
 
 #[derive(FromMeta, Default)]
@@ -878,9 +894,9 @@ pub struct ComplexObjectField {
     #[darling(multiple, rename = "tag")]
     pub tags: Vec<String>,
     pub override_from: Option<String>,
-    pub guard: Option<SpannedValue<String>>,
+    pub guard: Option<Expr>,
     pub visible: Option<Visible>,
-    pub complexity: Option<ComplexityType>,
+    pub complexity: Option<Expr>,
     #[darling(multiple)]
     pub derived: Vec<DerivedField>,
     pub flatten: bool,
@@ -900,16 +916,39 @@ pub struct Directive {
     pub locations: Vec<DirectiveLocation>,
 }
 
-#[derive(Debug, Copy, Clone, FromMeta)]
-#[darling(rename_all = "lowercase")]
+#[derive(Debug, Copy, Clone, FromMeta, strum::Display)]
+#[darling(rename_all = "PascalCase")]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
 pub enum DirectiveLocation {
     Field,
 }
 
-impl Display for DirectiveLocation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            DirectiveLocation::Field => write!(f, "FIELD"),
-        }
+#[derive(FromMeta, Default)]
+#[darling(default)]
+pub struct TypeDirective {
+    pub internal: bool,
+    pub name: Option<String>,
+    #[darling(default)]
+    pub name_type: bool,
+    pub visible: Option<Visible>,
+    pub repeatable: bool,
+    pub rename_args: Option<RenameRule>,
+    #[darling(multiple, rename = "location")]
+    pub locations: Vec<TypeDirectiveLocation>,
+    #[darling(default)]
+    pub composable: Option<String>,
+}
+
+#[derive(Debug, Copy, Clone, FromMeta, strum::Display)]
+#[darling(rename_all = "PascalCase")]
+#[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
+pub enum TypeDirectiveLocation {
+    FieldDefinition,
+    Object,
+}
+
+impl TypeDirectiveLocation {
+    pub fn location_trait_identifier(&self) -> Ident {
+        format_ident!("Directive_At_{}", self.to_string())
     }
 }

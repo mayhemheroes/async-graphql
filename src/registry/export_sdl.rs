@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::{collections::HashMap, fmt::Write};
 
 use crate::registry::{Deprecation, MetaField, MetaInputValue, MetaType, Registry};
 
@@ -14,6 +14,7 @@ pub struct SDLExportOptions {
     federation: bool,
     prefer_single_line_descriptions: bool,
     include_specified_by: bool,
+    compose_directive: bool,
 }
 
 impl SDLExportOptions {
@@ -80,6 +81,14 @@ impl SDLExportOptions {
             ..self
         }
     }
+
+    /// Enable `composeDirective` if federation is enabled
+    pub fn compose_directive(self) -> Self {
+        Self {
+            compose_directive: true,
+            ..self
+        }
+    }
 }
 
 impl Registry {
@@ -111,14 +120,40 @@ impl Registry {
             writeln!(sdl).ok();
         }
 
+        self.directives.values().for_each(|directive| {
+            writeln!(sdl, "{}", directive.sdl()).ok();
+        });
+
         if options.federation {
             writeln!(sdl, "extend schema @link(").ok();
-            writeln!(sdl, "\turl: \"https://specs.apollo.dev/federation/v2.1\",").ok();
-            writeln!(sdl, "\timport: [\"@key\", \"@tag\", \"@shareable\", \"@inaccessible\", \"@override\", \"@external\", \"@provides\", \"@requires\"]").ok();
+            writeln!(sdl, "\turl: \"https://specs.apollo.dev/federation/v2.3\",").ok();
+            writeln!(sdl, "\timport: [\"@key\", \"@tag\", \"@shareable\", \"@inaccessible\", \"@override\", \"@external\", \"@provides\", \"@requires\", \"@composeDirective\", \"@interfaceObject\"]").ok();
             writeln!(sdl, ")").ok();
-            self.directives.values().for_each(|directive| {
-                writeln!(sdl, "{}", directive.sdl()).ok();
-            });
+
+            if options.compose_directive {
+                writeln!(sdl).ok();
+                let mut compose_directives = HashMap::<&str, Vec<String>>::new();
+                self.directives
+                    .values()
+                    .filter_map(|d| {
+                        d.composable
+                            .as_ref()
+                            .map(|ext_url| (ext_url, format!("\"@{}\"", d.name)))
+                    })
+                    .for_each(|(ext_url, name)| {
+                        compose_directives.entry(ext_url).or_default().push(name)
+                    });
+                for (url, directives) in compose_directives {
+                    writeln!(sdl, "extend schema @link(").ok();
+                    writeln!(sdl, "\turl: \"{}\"", url).ok();
+                    writeln!(sdl, "\timport: [{}]", directives.join(",")).ok();
+                    writeln!(sdl, ")").ok();
+                    for name in directives {
+                        writeln!(sdl, "\t@composeDirective(name: {})", name).ok();
+                    }
+                    writeln!(sdl).ok();
+                }
+            }
         } else {
             writeln!(sdl, "schema {{").ok();
             writeln!(sdl, "\tquery: {}", self.query_type).ok();
@@ -153,7 +188,7 @@ impl Registry {
             }
 
             if let Some(description) = &field.description {
-                export_description(sdl, options, false, description);
+                export_description(sdl, options, 1, description);
             }
 
             if !field.args.is_empty() {
@@ -164,10 +199,24 @@ impl Registry {
                     args.sort_by_key(|value| &value.name);
                 }
 
+                let need_multiline = args.iter().any(|x| x.description.is_some());
+
                 for (i, arg) in args.into_iter().enumerate() {
                     if i != 0 {
-                        sdl.push_str(", ");
+                        sdl.push(',');
                     }
+
+                    if let Some(description) = &arg.description {
+                        writeln!(sdl).ok();
+                        export_description(sdl, options, 2, description);
+                    }
+
+                    if need_multiline {
+                        write!(sdl, "\t\t").ok();
+                    } else if i != 0 {
+                        sdl.push(' ');
+                    }
+
                     sdl.push_str(&export_input_value(arg));
 
                     if options.federation {
@@ -180,12 +229,20 @@ impl Registry {
                         }
                     }
                 }
+
+                if need_multiline {
+                    sdl.push_str("\n\t");
+                }
                 write!(sdl, "): {}", field.ty).ok();
             } else {
                 write!(sdl, "\t{}: {}", field.name, field.ty).ok();
             }
 
             write_deprecated(sdl, &field.deprecation);
+
+            for directive in &field.directive_invocations {
+                write!(sdl, " {}", directive.sdl()).ok();
+            }
 
             if options.federation {
                 if field.external {
@@ -231,7 +288,7 @@ impl Registry {
                 }
                 if export_scalar {
                     if let Some(description) = description {
-                        export_description(sdl, options, true, description);
+                        export_description(sdl, options, 0, description);
                     }
                     write!(sdl, "scalar {}", name).ok();
 
@@ -264,8 +321,11 @@ impl Registry {
                 keys,
                 description,
                 shareable,
+                resolvable,
                 inaccessible,
+                interface_object,
                 tags,
+                directive_invocations: raw_directives,
                 ..
             } => {
                 if Some(name.as_str()) == self.subscription_type.as_deref()
@@ -293,7 +353,7 @@ impl Registry {
                 }
 
                 if let Some(description) = description {
-                    export_description(sdl, options, true, description);
+                    export_description(sdl, options, 0, description);
                 }
 
                 if options.federation && *extends {
@@ -303,10 +363,18 @@ impl Registry {
                 write!(sdl, "type {}", name).ok();
                 self.write_implements(sdl, name);
 
+                for directive_invocation in raw_directives {
+                    write!(sdl, " {}", directive_invocation.sdl()).ok();
+                }
+
                 if options.federation {
                     if let Some(keys) = keys {
                         for key in keys {
-                            write!(sdl, " @key(fields: \"{}\")", key).ok();
+                            write!(sdl, " @key(fields: \"{}\"", key).ok();
+                            if !resolvable {
+                                write!(sdl, ", resolvable: false").ok();
+                            }
+                            write!(sdl, ")").ok();
                         }
                     }
                     if *shareable {
@@ -315,6 +383,10 @@ impl Registry {
 
                     if *inaccessible {
                         write!(sdl, " @inaccessible").ok();
+                    }
+
+                    if *interface_object {
+                        write!(sdl, " @interfaceObject").ok();
                     }
 
                     for tag in tags {
@@ -337,7 +409,7 @@ impl Registry {
                 ..
             } => {
                 if let Some(description) = description {
-                    export_description(sdl, options, true, description);
+                    export_description(sdl, options, 0, description);
                 }
 
                 if options.federation && *extends {
@@ -374,7 +446,7 @@ impl Registry {
                 ..
             } => {
                 if let Some(description) = description {
-                    export_description(sdl, options, true, description);
+                    export_description(sdl, options, 0, description);
                 }
 
                 write!(sdl, "enum {}", name).ok();
@@ -395,7 +467,7 @@ impl Registry {
 
                 for value in values {
                     if let Some(description) = &value.description {
-                        export_description(sdl, options, false, description);
+                        export_description(sdl, options, 1, description);
                     }
                     write!(sdl, "\t{}", value.name).ok();
                     write_deprecated(sdl, &value.deprecation);
@@ -424,7 +496,7 @@ impl Registry {
                 ..
             } => {
                 if let Some(description) = description {
-                    export_description(sdl, options, true, description);
+                    export_description(sdl, options, 0, description);
                 }
 
                 write!(sdl, "input {}", name).ok();
@@ -448,8 +520,8 @@ impl Registry {
                 }
 
                 for field in fields {
-                    if let Some(description) = &field.description {
-                        export_description(sdl, options, false, description);
+                    if let Some(ref description) = &field.description {
+                        export_description(sdl, options, 1, description);
                     }
                     write!(sdl, "\t{}", export_input_value(&field)).ok();
                     if options.federation {
@@ -474,7 +546,7 @@ impl Registry {
                 ..
             } => {
                 if let Some(description) = description {
-                    export_description(sdl, options, true, description);
+                    export_description(sdl, options, 0, description);
                 }
 
                 write!(sdl, "union {}", name).ok();
@@ -521,18 +593,17 @@ impl Registry {
 fn export_description(
     sdl: &mut String,
     options: &SDLExportOptions,
-    top_level: bool,
+    level: usize,
     description: &str,
 ) {
+    let tabs = "\t".repeat(level);
+
     if options.prefer_single_line_descriptions && !description.contains('\n') {
-        let tab = if top_level { "" } else { "\t" };
         let description = description.replace('"', r#"\""#);
-        writeln!(sdl, "{}\"{}\"", tab, description).ok();
-    } else if top_level {
-        writeln!(sdl, "\"\"\"\n{}\n\"\"\"", description).ok();
+        writeln!(sdl, "{tabs}\"{description}\"").ok();
     } else {
-        let description = description.replace('\n', "\n\t");
-        writeln!(sdl, "\t\"\"\"\n\t{}\n\t\"\"\"", description).ok();
+        let description = description.replace('\n', &format!("\n{tabs}"));
+        writeln!(sdl, "{tabs}\"\"\"\n{tabs}{description}\n{tabs}\"\"\"").ok();
     }
 }
 
@@ -585,6 +656,7 @@ fn escape_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{model::__DirectiveLocation, registry::MetaDirective};
 
     #[test]
     fn test_escape_string() {
@@ -592,5 +664,59 @@ mod tests {
             escape_string("1\\\x08d\x0c3\n4\r5\t6"),
             "1\\\\\\bd\\f3\\n4\\r5\\t6"
         );
+    }
+
+    #[test]
+    fn test_compose_directive_dsl() {
+        let expected = r#"directive @custom_type_directive on FIELD_DEFINITION
+extend schema @link(
+	url: "https://specs.apollo.dev/federation/v2.3",
+	import: ["@key", "@tag", "@shareable", "@inaccessible", "@override", "@external", "@provides", "@requires", "@composeDirective", "@interfaceObject"]
+)
+
+extend schema @link(
+	url: "https://custom.spec.dev/extension/v1.0"
+	import: ["@custom_type_directive"]
+)
+	@composeDirective(name: "@custom_type_directive")
+
+"#;
+        let mut registry = Registry::default();
+        registry.add_directive(MetaDirective {
+            name: "custom_type_directive".to_string(),
+            description: None,
+            locations: vec![__DirectiveLocation::FIELD_DEFINITION],
+            args: Default::default(),
+            is_repeatable: false,
+            visible: None,
+            composable: Some("https://custom.spec.dev/extension/v1.0".to_string()),
+        });
+        let dsl = registry.export_sdl(SDLExportOptions::new().federation().compose_directive());
+        assert_eq!(dsl, expected)
+    }
+
+    #[test]
+    fn test_type_directive_sdl_without_federation() {
+        let expected = r#"directive @custom_type_directive on FIELD_DEFINITION | OBJECT
+schema {
+	query: Query
+}
+"#;
+        let mut registry = Registry::default();
+        registry.add_directive(MetaDirective {
+            name: "custom_type_directive".to_string(),
+            description: None,
+            locations: vec![
+                __DirectiveLocation::FIELD_DEFINITION,
+                __DirectiveLocation::OBJECT,
+            ],
+            args: Default::default(),
+            is_repeatable: false,
+            visible: None,
+            composable: None,
+        });
+        registry.query_type = "Query".to_string();
+        let sdl = registry.export_sdl(SDLExportOptions::new());
+        assert_eq!(sdl, expected)
     }
 }

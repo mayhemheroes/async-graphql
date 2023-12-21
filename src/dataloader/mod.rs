@@ -366,7 +366,10 @@ impl<T, C: CacheFactory> DataLoader<T, C> {
                 let disable_cache = self.disable_cache.load(Ordering::SeqCst);
                 let task = async move { inner.do_load(disable_cache, keys).await };
                 #[cfg(feature = "tracing")]
-                let task = task.instrument(info_span!("immediate_load"));
+                let task = task
+                    .instrument(info_span!("immediate_load"))
+                    .in_current_span();
+
                 (self.spawner)(Box::pin(task));
             }
             Action::StartFetch => {
@@ -392,7 +395,7 @@ impl<T, C: CacheFactory> DataLoader<T, C> {
                     }
                 };
                 #[cfg(feature = "tracing")]
-                let task = task.instrument(info_span!("start_fetch"));
+                let task = task.instrument(info_span!("start_fetch")).in_current_span();
                 (self.spawner)(Box::pin(task))
             }
             Action::Delay => {}
@@ -457,6 +460,27 @@ impl<T, C: CacheFactory> DataLoader<T, C> {
             .downcast_mut::<Requests<K, T>>()
             .unwrap();
         typed_requests.cache_storage.clear();
+    }
+
+    /// Gets all values in the cache.
+    pub fn get_cached_values<K>(&self) -> HashMap<K, T::Value>
+    where
+        K: Send + Sync + Hash + Eq + Clone + 'static,
+        T: Loader<K>,
+    {
+        let tid = TypeId::of::<K>();
+        let requests = self.inner.requests.lock().unwrap();
+        match requests.get(&tid) {
+            None => HashMap::new(),
+            Some(requests) => {
+                let typed_requests = requests.downcast_ref::<Requests<K, T>>().unwrap();
+                typed_requests
+                    .cache_storage
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            }
+        }
     }
 }
 

@@ -54,7 +54,7 @@ impl<'a> NoUndefinedVariables<'a> {
 
 impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
     fn exit_document(&mut self, ctx: &mut VisitorContext<'a>, _doc: &'a ExecutableDocument) {
-        for (op_name, &(ref def_pos, ref def_vars)) in &self.defined_variables {
+        for (op_name, (def_pos, def_vars)) in &self.defined_variables {
             let mut undef = Vec::new();
             let mut visited = HashSet::new();
             self.find_undef_vars(
@@ -120,14 +120,11 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
         value: &'a Positioned<Value>,
     ) {
         if let Some(ref scope) = self.current_scope {
-            self.used_variables
-                .entry(*scope)
-                .or_insert_with(HashMap::new)
-                .extend(
-                    referenced_variables(&value.node)
-                        .into_iter()
-                        .map(|n| (n, name.pos)),
-                );
+            self.used_variables.entry(*scope).or_default().extend(
+                referenced_variables(&value.node)
+                    .into_iter()
+                    .map(|n| (n, name.pos)),
+            );
         }
     }
 
@@ -139,7 +136,7 @@ impl<'a> Visitor<'a> for NoUndefinedVariables<'a> {
         if let Some(ref scope) = self.current_scope {
             self.spreads
                 .entry(*scope)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(&fragment_spread.node.fragment_name.node);
         }
     }

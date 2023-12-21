@@ -12,6 +12,7 @@ use crate::{
 pub fn generate(object_args: &args::MergedSubscription) -> GeneratorResult<TokenStream> {
     let crate_name = get_crate_name(object_args.internal);
     let ident = &object_args.ident;
+    let (impl_generics, ty_generics, where_clause) = object_args.generics.split_for_impl();
     let extends = object_args.extends;
     let gql_typename = if !object_args.name_type {
         let name = object_args
@@ -55,7 +56,7 @@ pub fn generate(object_args: &args::MergedSubscription) -> GeneratorResult<Token
     let visible = visible_fn(&object_args.visible);
     let expanded = quote! {
         #[allow(clippy::all, clippy::pedantic)]
-        impl #crate_name::SubscriptionType for #ident {
+        impl #impl_generics #crate_name::SubscriptionType for #ident #ty_generics #where_clause {
             fn type_name() -> ::std::borrow::Cow<'static, ::std::primitive::str> {
                 #gql_typename
             }
@@ -80,10 +81,13 @@ pub fn generate(object_args: &args::MergedSubscription) -> GeneratorResult<Token
                         keys: ::std::option::Option::None,
                         visible: #visible,
                         shareable: false,
+                        resolvable: true,
                         inaccessible: false,
+                        interface_object: false,
                         tags: ::std::default::Default::default(),
                         is_subscription: true,
                         rust_typename: ::std::option::Option::Some(::std::any::type_name::<Self>()),
+                        directive_invocations: ::std::default::Default::default(),
                     }
                 })
             }
